@@ -111,7 +111,9 @@ mod tests {
     fn nested_if() {
         assert_eq!(
             toks("if true then if false then true else false else true"),
-            [If, True, Then, If, False, Then, True, Else, False, Else, True, EOF]
+            [
+                If, True, Then, If, False, Then, True, Else, False, Else, True, EOF
+            ]
         );
     }
 
@@ -137,7 +139,13 @@ mod tests {
     fn punctuation_needs_no_whitespace() {
         assert_eq!(
             toks("f(x)"),
-            [Ident("f".into()), LeftParen, Ident("x".into()), RightParen, EOF]
+            [
+                Ident("f".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                EOF
+            ]
         );
         assert_eq!(
             toks("((x))"),
