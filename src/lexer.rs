@@ -38,15 +38,22 @@ pub struct LexError {
     pub found: String,
 }
 
+/// a token paired with its byte range in the source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub span: Range<usize>,
+}
+
 /// tokenizes program source code `src` into a vec of tokens.
 /// appends `Token::EOF` to the end of the stream.
-pub fn tokenize(src: &str) -> Result<Vec<(Token, Range<usize>)>, LexError> {
+pub fn tokenize(src: &str) -> Result<Vec<SpannedToken>, LexError> {
     let mut toks = Vec::new();
     let mut lexer = Token::lexer(src);
     while let Some(result) = lexer.next() {
         let span = lexer.span();
         match result {
-            Ok(tok) => toks.push((tok, span)),
+            Ok(token) => toks.push(SpannedToken { token, span }),
             Err(_) => {
                 return Err(LexError {
                     span: span.clone(),
@@ -55,7 +62,10 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, Range<usize>)>, LexError> {
             }
         }
     }
-    toks.push((Token::EOF, src.len()..src.len()));
+    toks.push(SpannedToken {
+        token: Token::EOF,
+        span: src.len()..src.len(),
+    });
     Ok(toks)
 }
 
@@ -69,7 +79,7 @@ mod tests {
         tokenize(src)
             .expect("lex error")
             .into_iter()
-            .map(|(t, _)| t)
+            .map(|s| s.token)
             .collect()
     }
 
@@ -188,25 +198,27 @@ mod tests {
         let lexed = tokenize(src).expect("lex error");
 
         let mut prev_end = 0;
-        for (tok, span) in &lexed {
-            assert!(span.start >= prev_end, "spans overlap: {span:?}");
+        for s in &lexed {
+            assert!(s.span.start >= prev_end, "spans overlap: {:?}", s.span);
             // the skipped text between consecutive tokens must be whitespace only
             assert!(
-                src[prev_end..span.start]
+                src[prev_end..s.span.start]
                     .bytes()
                     .all(|b| b.is_ascii_whitespace()),
-                "non-whitespace skipped before {tok:?} at {span:?}"
+                "non-whitespace skipped before {:?} at {:?}",
+                s.token,
+                s.span
             );
-            prev_end = span.end;
+            prev_end = s.span.end;
         }
     }
 
     #[test]
     fn spans_slice_back_to_source_text() {
         let src = "let f(x) = if b then true else false";
-        for (tok, span) in tokenize(src).expect("lex error") {
-            let text = &src[span.clone()];
-            match tok {
+        for st in tokenize(src).expect("lex error") {
+            let text = &src[st.span.clone()];
+            match st.token {
                 Let => assert_eq!(text, "let"),
                 If => assert_eq!(text, "if"),
                 Then => assert_eq!(text, "then"),
@@ -218,7 +230,7 @@ mod tests {
                 Equals => assert_eq!(text, "="),
                 Comma => assert_eq!(text, ","),
                 Ident(s) => assert_eq!(text, s),
-                EOF => assert!(text.is_empty(), "EOF span at {span:?} is not empty"),
+                EOF => assert!(text.is_empty(), "EOF span at {:?} is not empty", st.span),
             }
         }
     }

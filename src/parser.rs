@@ -1,4 +1,6 @@
-use crate::lexer::Token;
+use std::ops::Range;
+
+use crate::lexer::{SpannedToken, Token};
 
 #[derive(Debug, PartialEq)]
 struct Program {
@@ -28,19 +30,20 @@ enum Expr {
 }
 
 #[derive(Debug, PartialEq)]
-struct ParseError {
-    message: String,
+pub struct ParseError {
+    pub span: Range<usize>,
+    pub message: String,
 }
 
-struct Parser {
-    tokens: Vec<Token>,
+pub struct Parser {
+    tokens: Vec<SpannedToken>,
     cursor: usize,
 }
 
 impl Parser {
     // returns the next token
     fn peek(&self) -> &Token {
-        &self.tokens[self.cursor]
+        &self.tokens[self.cursor].token
     }
 
     // returns the token two after this one
@@ -48,17 +51,30 @@ impl Parser {
         if self.cursor + 1 >= self.tokens.len() {
             &Token::EOF
         } else {
-            &self.tokens[self.cursor + 1]
+            &self.tokens[self.cursor + 1].token
         }
     }
 
     // advances the cursor by one token
     fn advance(&mut self) -> Token {
-        let token = self.tokens[self.cursor].clone();
+        let token = self.tokens[self.cursor].token.clone();
         if self.cursor + 1 < self.tokens.len() {
             self.cursor += 1;
         }
         token
+    }
+
+    // span of the token the cursor is currently on
+    fn span(&self) -> Range<usize> {
+        self.tokens[self.cursor].span.clone()
+    }
+
+    // builds an error pointing at the current token
+    fn error(&self, message: String) -> ParseError {
+        ParseError {
+            span: self.span(),
+            message,
+        }
     }
 
     // advances the cursor if the next token is of the same type as `tok`,
@@ -69,13 +85,15 @@ impl Parser {
             self.advance();
             Ok(token)
         } else {
-            Err(ParseError {
-                message: format!("expected {:?}, but got {:?}", expected, self.peek()),
-            })
+            Err(self.error(format!(
+                "expected {:?}, but got {:?}",
+                expected,
+                self.peek()
+            )))
         }
     }
 
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Self { tokens, cursor: 0 }
     }
 
@@ -93,8 +111,10 @@ impl Parser {
 
         self.expect(&Token::Let)?;
 
+        let name_span = self.span();
         let Token::Ident(function) = self.advance() else {
             return Err(ParseError {
+                span: name_span,
                 message: "expected function name".into(),
             });
         };
@@ -118,8 +138,10 @@ impl Parser {
 
         // match the first param
         let mut params = Vec::new();
+        let name_span = self.span();
         let Token::Ident(var_name) = self.advance() else {
             return Err(ParseError {
+                span: name_span,
                 message: "expected parameter name".into(),
             });
         };
@@ -132,8 +154,10 @@ impl Parser {
             } else {
                 break;
             }
+            let name_span = self.span();
             let Token::Ident(var_name) = self.advance() else {
                 return Err(ParseError {
+                    span: name_span,
                     message: "expected parameter name".into(),
                 });
             };
@@ -226,12 +250,10 @@ impl Parser {
             return Ok(Expr::Bool(false));
         }
 
-        Err(ParseError {
-            message: format!(
-                "couldn't parse expression starting with token {:?}",
-                self.peek()
-            ),
-        })
+        Err(self.error(format!(
+            "couldn't parse expression starting with token {:?}",
+            self.peek()
+        )))
     }
 }
 
@@ -241,11 +263,7 @@ mod tests {
 
     /// lexes `src` and parses it.
     fn parse_str(src: &str) -> Result<Program, ParseError> {
-        let tokens = crate::lexer::tokenize(src)
-            .expect("lex error")
-            .into_iter()
-            .map(|(t, _)| t)
-            .collect();
+        let tokens = crate::lexer::tokenize(src).expect("lex error");
         Parser::new(tokens).parse()
     }
 
@@ -254,12 +272,17 @@ mod tests {
         parse_str(src).expect("parse error")
     }
 
-    /// parses `src`, panicking on success, and returns the error message.
-    fn parse_err(src: &str) -> String {
+    /// parses `src`, panicking on success, and returns the error.
+    fn err(src: &str) -> ParseError {
         match parse_str(src) {
             Ok(p) => panic!("expected parse error, got {p:?}"),
-            Err(e) => e.message,
+            Err(e) => e,
         }
+    }
+
+    /// like `err`, but returns just the message.
+    fn parse_err(src: &str) -> String {
+        err(src).message
     }
 
     fn var(name: &str) -> Expr {
@@ -420,10 +443,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_equals() {
-        assert_eq!(
-            parse_err("let f(x) true"),
-            "expected Equals, but got True"
-        );
+        assert_eq!(parse_err("let f(x) true"), "expected Equals, but got True");
     }
 
     #[test]
@@ -437,18 +457,12 @@ mod tests {
     #[test]
     fn rejects_empty_params() {
         // grammar requires one or more params
-        assert_eq!(
-            parse_err("let f() = true"),
-            "expected parameter name"
-        );
+        assert_eq!(parse_err("let f() = true"), "expected parameter name");
     }
 
     #[test]
     fn rejects_trailing_comma_in_params() {
-        assert_eq!(
-            parse_err("let f(x,) = true"),
-            "expected parameter name"
-        );
+        assert_eq!(parse_err("let f(x,) = true"), "expected parameter name");
     }
 
     #[test]
@@ -483,5 +497,27 @@ mod tests {
             parse_err("let g(x) = g()"),
             "couldn't parse expression starting with token RightParen"
         );
+    }
+
+    #[test]
+    fn error_spans_point_at_the_offending_token() {
+        //                          0123456789_0123456789_0123456789_01
+        //                                    1         2          3
+        let e = err("let f(x) = if x else true");
+        assert_eq!(e.message, "expected Then, but got Else");
+        assert_eq!(e.span, 16..20); // `else`
+
+        let e = err("let true(x) = true");
+        assert_eq!(e.message, "expected function name");
+        assert_eq!(e.span, 4..8); // `true` (a digit wouldn't even lex)
+
+        let e = err("let f(,) = true");
+        assert_eq!(e.message, "expected parameter name");
+        assert_eq!(e.span, 6..7); // `,`
+
+        let e = err("let f(x) = (x");
+        assert_eq!(e.message, "expected RightParen, but got EOF");
+        // the EOF token has an empty span at the end of the input
+        assert_eq!(e.span, 13..13);
     }
 }

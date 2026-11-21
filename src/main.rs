@@ -5,8 +5,8 @@ fn main() {
     let src = "let f(x, y) = if x then f(y, false) else true";
     match lexer::tokenize(src) {
         Ok(toks) => {
-            for (tok, span) in toks {
-                println!("{span:?} {tok:?}");
+            for s in toks {
+                println!("{:?} {:?}", s.span, s.token);
             }
         }
         Err(e) => println!("{:?}: unexpected character {:?}", e.span, e.found),
