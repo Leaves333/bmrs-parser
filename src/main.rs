@@ -1,4 +1,5 @@
 mod lexer;
+mod parser;
 
 fn main() {
     let src = "let f(x, y) = if x then f(y, false) else true";
