@@ -3,19 +3,19 @@ use std::ops::Range;
 use crate::lexer::{SpannedToken, Token};
 
 #[derive(Debug, PartialEq)]
-struct Program {
-    defs: Vec<Def>,
+pub struct Program {
+    pub defs: Vec<Def>,
 }
 
-#[derive(Debug, PartialEq)]
-struct Def {
-    function: String,
-    params: Vec<String>,
-    expr: Expr,
+#[derive(Debug, PartialEq, Clone)]
+pub struct Def {
+    pub function: String,
+    pub params: Vec<String>,
+    pub expr: Expr,
 }
 
-#[derive(Debug, PartialEq)]
-enum Expr {
+#[derive(Debug, PartialEq, Clone)]
+pub enum Expr {
     IfThenElse {
         if_clause: Box<Expr>,
         then_clause: Box<Expr>,
