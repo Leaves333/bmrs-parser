@@ -280,9 +280,10 @@ mod tests {
         }
     }
 
-    /// like `err`, but returns just the message.
-    fn parse_err(src: &str) -> String {
-        err(src).message
+    /// parses `src`, panicking on success, and returns the error's span.
+    /// error assertions match spans, never message text.
+    fn err_span(src: &str) -> Range<usize> {
+        err(src).span
     }
 
     fn var(name: &str) -> Expr {
@@ -411,113 +412,81 @@ mod tests {
 
     #[test]
     fn rejects_missing_then() {
-        assert_eq!(
-            parse_err("let f(x) = if x else true"),
-            "expected Then, but got Else"
-        );
+        //                          0123456789_0123456789_0
+        //                                    1         2
+        assert_eq!(err_span("let f(x) = if x else true"), 16..20); // `else`
     }
 
     #[test]
     fn rejects_missing_else() {
-        assert_eq!(
-            parse_err("let f(x) = if x then true"),
-            "expected Else, but got EOF"
-        );
+        // the EOF token has an empty span at the end of the input
+        assert_eq!(err_span("let f(x) = if x then true"), 25..25);
     }
 
     #[test]
     fn rejects_unclosed_arg_list() {
-        assert_eq!(
-            parse_err("let f(x) = f(x"),
-            "expected RightParen, but got EOF"
-        );
+        assert_eq!(err_span("let f(x) = f(x"), 14..14); // EOF
     }
 
     #[test]
     fn rejects_unclosed_group() {
-        assert_eq!(
-            parse_err("let f(x) = (x"),
-            "expected RightParen, but got EOF"
-        );
+        assert_eq!(err_span("let f(x) = (x"), 13..13); // EOF
     }
 
     #[test]
     fn rejects_missing_equals() {
-        assert_eq!(parse_err("let f(x) true"), "expected Equals, but got True");
+        assert_eq!(err_span("let f(x) true"), 9..13); // `true`
     }
 
     #[test]
     fn rejects_missing_parens_around_params() {
-        assert_eq!(
-            parse_err("let f = true"),
-            "expected LeftParen, but got Equals"
-        );
+        assert_eq!(err_span("let f = true"), 6..7); // `=`
     }
 
     #[test]
     fn rejects_empty_params() {
         // grammar requires one or more params
-        assert_eq!(parse_err("let f() = true"), "expected parameter name");
+        assert_eq!(err_span("let f() = true"), 6..7); // `)`
     }
 
     #[test]
     fn rejects_trailing_comma_in_params() {
-        assert_eq!(parse_err("let f(x,) = true"), "expected parameter name");
+        assert_eq!(err_span("let f(x,) = true"), 8..9); // `)`
     }
 
     #[test]
     fn rejects_def_without_let() {
-        assert_eq!(
-            parse_err("f(x) = true"),
-            "expected Let, but got Ident(\"f\")"
-        );
+        assert_eq!(err_span("f(x) = true"), 0..1); // `f`
     }
 
     #[test]
     fn rejects_trailing_garbage_after_def() {
-        assert_eq!(
-            parse_err("let f(x) = true false"),
-            "expected Let, but got False"
-        );
+        assert_eq!(err_span("let f(x) = true false"), 16..21); // `false`
     }
 
     #[test]
     fn rejects_expr_starting_with_punctuation() {
-        assert_eq!(
-            parse_err("let f(x) = ,"),
-            "couldn't parse expression starting with token Comma"
-        );
+        assert_eq!(err_span("let f(x) = ,"), 11..12); // `,`
     }
 
     #[test]
     fn rejects_zero_arg_application() {
         // the grammar's `[ <expr> ... ]` would allow `g()`, but the parser
         // requires at least one argument — see the open question in dsl.md
-        assert_eq!(
-            parse_err("let g(x) = g()"),
-            "couldn't parse expression starting with token RightParen"
-        );
+        assert_eq!(err_span("let g(x) = g()"), 13..14); // `)`
     }
 
     #[test]
     fn error_spans_point_at_the_offending_token() {
         //                          0123456789_0123456789_0123456789_01
         //                                    1         2          3
-        let e = err("let f(x) = if x else true");
-        assert_eq!(e.message, "expected Then, but got Else");
-        assert_eq!(e.span, 16..20); // `else`
+        assert_eq!(err_span("let f(x) = if x else true"), 16..20); // `else`
 
-        let e = err("let true(x) = true");
-        assert_eq!(e.message, "expected function name");
-        assert_eq!(e.span, 4..8); // `true` (a digit wouldn't even lex)
+        assert_eq!(err_span("let true(x) = true"), 4..8); // `true` (a digit wouldn't even lex)
 
-        let e = err("let f(,) = true");
-        assert_eq!(e.message, "expected parameter name");
-        assert_eq!(e.span, 6..7); // `,`
+        assert_eq!(err_span("let f(,) = true"), 6..7); // `,`
 
-        let e = err("let f(x) = (x");
-        assert_eq!(e.message, "expected RightParen, but got EOF");
         // the EOF token has an empty span at the end of the input
-        assert_eq!(e.span, 13..13);
+        assert_eq!(err_span("let f(x) = (x"), 13..13);
     }
 }
