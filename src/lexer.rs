@@ -27,7 +27,7 @@ pub enum Token {
     /// top-level marker: `let #f(x) = ...`
     #[token("#")]
     Hash,
-    #[regex(r"[A-Za-z_][A-Za-z0-9_]*", |lex| lex.slice().to_string())]
+    #[regex(r"[A-Za-z_][A-Za-z0-9_']*", |lex| lex.slice().to_string())]
     Ident(String),
     /// this variant is never produced by the lexer.
     /// `tokenize` appends it at the end of the input,

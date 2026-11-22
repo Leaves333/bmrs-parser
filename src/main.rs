@@ -1,22 +1,43 @@
+use clap::Parser;
+use std::{fs::read, path::PathBuf};
+
 mod eval;
 mod lexer;
 mod parser;
 
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    source: PathBuf,
+    input: String,
+}
+
 fn main() {
-    let src = "let f(x, y) = if x then f(y, false) else true";
-    match lexer::tokenize(src) {
-        Ok(toks) => {
-            for s in toks {
-                println!("{:?} {:?}", s.span, s.token);
-            }
-        }
-        Err(e) => println!("{:?}: unexpected character {:?}", e.span, e.found),
-    }
+    let args = Args::parse();
 
-    println!("---");
+    let bytes = read(&args.source).expect("error while reading program file!");
+    let program_source =
+        String::from_utf8(bytes).expect("invalid UTF-8 formatting in program text");
 
-    match lexer::tokenize("let f(x) = @") {
-        Ok(toks) => println!("{toks:?}"),
-        Err(e) => println!("{:?}: unexpected character {:?}", e.span, e.found),
-    }
+    println!("program source:\n{program_source}");
+
+    let tokens = lexer::tokenize(&program_source)
+        .unwrap_or_else(|e| panic!("invalid program: encountered lexing error\n{e:?}"));
+
+    let program = parser::Parser::new(tokens)
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid program: encountered parsing error\n{e:?}"));
+
+    println!(
+        "running program with source:{} input:{}",
+        args.source.display(),
+        args.input,
+    );
+
+    let model = eval::StringModel::new(&args.input);
+    let result = eval::eval_program(program, model)
+        .unwrap_or_else(|e| panic!("invalid program: encountered runtime error\n{e:?}"));
+
+    println!("{result:?}");
 }
