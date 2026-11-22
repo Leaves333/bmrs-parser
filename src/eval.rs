@@ -36,9 +36,9 @@ enum Entry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    function: String,
-    args: Vec<Value>,
+pub struct CacheKey {
+    pub function: String,
+    pub args: Vec<Value>,
 }
 
 struct Env {
@@ -280,7 +280,10 @@ pub fn eval_expr(
 
 // what should the output of evaluating a program be?
 // a truth table for each function, for each position
-pub fn eval_program(program: Program, model: StringModel) -> Result<(), EvalError> {
+pub fn eval_program(
+    program: Program,
+    model: StringModel,
+) -> Result<HashMap<CacheKey, Value>, EvalError> {
     // prepopulate env based on string model and defined functions
     let mut env = Env::new(&model.alphabet, &program.defs);
 
@@ -318,7 +321,7 @@ pub fn eval_program(program: Program, model: StringModel) -> Result<(), EvalErro
         }
     }
 
-    todo!()
+    Ok(env.cache)
 }
 
 #[cfg(test)]
@@ -346,6 +349,28 @@ mod tests {
 
     fn ok(src: &str, word: &str, fname: &str, pos: usize) -> Value {
         eval_fn_at(src, word, fname, pos).expect("eval error")
+    }
+
+    /// parse `src`, evaluate the whole program over `word`, and return
+    /// the resulting memo cache.
+    fn eval_cache_result(
+        src: &str,
+        word: &str,
+    ) -> Result<HashMap<CacheKey, Value>, EvalError> {
+        let tokens = tokenize(src).expect("lex error");
+        let program = Parser::new(tokens).parse().expect("parse error");
+        eval_program(program, StringModel::new(word))
+    }
+
+    fn eval_cache(src: &str, word: &str) -> HashMap<CacheKey, Value> {
+        eval_cache_result(src, word).expect("eval error")
+    }
+
+    fn key(fname: &str, args: Vec<Value>) -> CacheKey {
+        CacheKey {
+            function: fname.into(),
+            args,
+        }
     }
 
     /// assert the eval fails with this error *kind*, ignoring the payload
@@ -493,5 +518,84 @@ mod tests {
     #[test]
     fn param_conflicting_with_builtin_is_name_conflict() {
         assert_err!("let f(s) = true", "ab", "f", 0, NameConflict);
+    }
+
+    // --- cache contents after whole-program evaluation ---
+
+    #[test]
+    fn eval_program_caches_all_top_level_positions() {
+        // "ab": pos 0 is a, pos 1 is b
+        let cache = eval_cache("let f(x) = a(x)\nlet g(x) = b(x)", "ab");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), T);
+        expected.insert(key("f", vec![p(1)]), F);
+        expected.insert(key("g", vec![p(0)]), F);
+        expected.insert(key("g", vec![p(1)]), T);
+        // exactly the top-level entries — built-in applications (a, b) are
+        // not memoized, only user-defined results
+        assert_eq!(cache, expected);
+    }
+
+    #[test]
+    fn recursion_memosizes_intermediate_calls() {
+        // f(0) recurses through f(1); only f(0) starts the chain, but the
+        // intermediate f(1) must land in the cache too
+        let src = "let f(x) = if a(x) then true else f(s(x))";
+        let cache = eval_cache(src, "baa");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), T);
+        expected.insert(key("f", vec![p(1)]), T);
+        expected.insert(key("f", vec![p(2)]), T);
+        assert_eq!(cache, expected);
+    }
+
+    #[test]
+    fn cached_values_match_direct_evaluation() {
+        // NOTE: eval_program currently evaluates *every* def at the top level
+        // (see the TODO in eval_program), so helpers must be position-valued
+        // for the whole program to evaluate — hence `g`, not a bool helper.
+        let src = "let g(x) = a(x)\nlet f(x) = g(x)";
+        let cache = eval_cache(src, "ab");
+        for fname in ["f", "g"] {
+            for pos in 0..2 {
+                assert_eq!(
+                    cache[&key(fname, vec![p(pos)])],
+                    ok(src, "ab", fname, pos),
+                    "cache disagrees with direct eval for {fname} at {pos}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cache_hit_returns_same_value() {
+        let src = "let g(x) = a(x)\nlet f(x) = g(x)";
+        let tokens = tokenize(src).expect("lex error");
+        let program = Parser::new(tokens).parse().expect("parse error");
+        let model = StringModel::new("ab");
+        let mut env = Env::new(&model.alphabet, &program.defs);
+        let def = program
+            .defs
+            .iter()
+            .find(|d| d.function == "f")
+            .expect("def not found");
+        let mut vars = VariableTable::new();
+        vars.insert_variable(&env, &def.params[0], p(0)).unwrap();
+
+        // first call evaluates and memoizes g(0)
+        let first = eval_expr(&def.expr, &model, &mut env, &vars).expect("eval error");
+        assert_eq!(env.cache.get(&key("g", vec![p(0)])), Some(&first));
+
+        // second call hits the cache and must return the same value
+        let second = eval_expr(&def.expr, &model, &mut env, &vars).expect("eval error");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn top_level_function_with_two_params_is_type_error() {
+        match eval_cache_result("let f(x, y) = a(x)", "ab") {
+            Err(EvalError::TypeError { .. }) => {}
+            other => panic!("expected EvalError::TypeError, got {other:?}"),
+        }
     }
 }
