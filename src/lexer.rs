@@ -24,6 +24,9 @@ pub enum Token {
     Equals,
     #[token(",")]
     Comma,
+    /// top-level marker: `let #f(x) = ...`
+    #[token("#")]
+    Hash,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*", |lex| lex.slice().to_string())]
     Ident(String),
     /// this variant is never produced by the lexer.
@@ -171,6 +174,30 @@ mod tests {
     }
 
     #[test]
+    fn hash_lexes_as_its_own_token() {
+        assert_eq!(toks("#"), [Hash, EOF]);
+        // no `#ident` token — the marker is always separate
+        assert_eq!(toks("#f"), [Hash, Ident("f".into()), EOF]);
+        assert_eq!(
+            toks("let #f(x) = a(x)"),
+            [
+                Let,
+                Hash,
+                Ident("f".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                Equals,
+                Ident("a".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                EOF,
+            ]
+        );
+    }
+
+    #[test]
     fn whitespace_kinds_are_skipped() {
         assert_eq!(
             toks("let\t\r\n\x0C f = true"),
@@ -229,6 +256,7 @@ mod tests {
                 RightParen => assert_eq!(text, ")"),
                 Equals => assert_eq!(text, "="),
                 Comma => assert_eq!(text, ","),
+                Hash => assert_eq!(text, "#"),
                 Ident(s) => assert_eq!(text, s),
                 EOF => assert!(text.is_empty(), "EOF span at {:?} is not empty", st.span),
             }

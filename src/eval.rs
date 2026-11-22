@@ -353,10 +353,7 @@ mod tests {
 
     /// parse `src`, evaluate the whole program over `word`, and return
     /// the resulting memo cache.
-    fn eval_cache_result(
-        src: &str,
-        word: &str,
-    ) -> Result<HashMap<CacheKey, Value>, EvalError> {
+    fn eval_cache_result(src: &str, word: &str) -> Result<HashMap<CacheKey, Value>, EvalError> {
         let tokens = tokenize(src).expect("lex error");
         let program = Parser::new(tokens).parse().expect("parse error");
         eval_program(program, StringModel::new(word))
@@ -525,7 +522,7 @@ mod tests {
     #[test]
     fn eval_program_caches_all_top_level_positions() {
         // "ab": pos 0 is a, pos 1 is b
-        let cache = eval_cache("let f(x) = a(x)\nlet g(x) = b(x)", "ab");
+        let cache = eval_cache("let #f(x) = a(x)\nlet #g(x) = b(x)", "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), T);
         expected.insert(key("f", vec![p(1)]), F);
@@ -540,7 +537,7 @@ mod tests {
     fn recursion_memosizes_intermediate_calls() {
         // f(0) recurses through f(1); only f(0) starts the chain, but the
         // intermediate f(1) must land in the cache too
-        let src = "let f(x) = if a(x) then true else f(s(x))";
+        let src = "let #f(x) = if a(x) then true else f(s(x))";
         let cache = eval_cache(src, "baa");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), T);
@@ -551,10 +548,8 @@ mod tests {
 
     #[test]
     fn cached_values_match_direct_evaluation() {
-        // NOTE: eval_program currently evaluates *every* def at the top level
-        // (see the TODO in eval_program), so helpers must be position-valued
-        // for the whole program to evaluate — hence `g`, not a bool helper.
-        let src = "let g(x) = a(x)\nlet f(x) = g(x)";
+        // both marked top level, so each gets a full truth table
+        let src = "let #g(x) = a(x)\nlet #f(x) = g(x)";
         let cache = eval_cache(src, "ab");
         for fname in ["f", "g"] {
             for pos in 0..2 {
@@ -593,9 +588,49 @@ mod tests {
 
     #[test]
     fn top_level_function_with_two_params_is_type_error() {
-        match eval_cache_result("let f(x, y) = a(x)", "ab") {
+        match eval_cache_result("let #f(x, y) = a(x)", "ab") {
             Err(EvalError::TypeError { .. }) => {}
             other => panic!("expected EvalError::TypeError, got {other:?}"),
         }
+    }
+
+    // --- top-level marking gates evaluation ---
+
+    #[test]
+    fn marked_program_with_bool_helper_evaluates() {
+        // regression: unmarked helpers are only evaluated when called, so a
+        // bool-argument helper like `not` no longer crashes whole-program eval
+        let src = "let #f(x) = not(a(x))\nlet not(x) = if x then false else true";
+        let cache = eval_cache(src, "ab");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), F);
+        expected.insert(key("f", vec![p(1)]), T);
+        // the helper's per-call results are memoized, keyed by their bool args
+        expected.insert(key("not", vec![T]), F);
+        expected.insert(key("not", vec![F]), T);
+        assert_eq!(cache, expected);
+    }
+
+    #[test]
+    fn unmarked_defs_stay_out_of_the_truth_table() {
+        // `g` is a helper never called by `f`, so it gets no top-level entries
+        let cache = eval_cache("let #f(x) = a(x)\nlet g(x) = b(x)", "ab");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), T);
+        expected.insert(key("f", vec![p(1)]), F);
+        assert_eq!(cache, expected);
+    }
+
+    #[test]
+    fn program_with_no_marked_defs_has_an_empty_cache() {
+        // a program of pure helpers is legal, it just computes nothing
+        assert!(eval_cache("let f(x) = a(x)", "ab").is_empty());
+    }
+
+    #[test]
+    fn unmarked_two_param_def_is_not_a_type_error() {
+        // the single-argument restriction applies only to marked defs
+        let cache = eval_cache_result("let f(x, y) = a(x)", "ab").expect("eval error");
+        assert!(cache.is_empty());
     }
 }

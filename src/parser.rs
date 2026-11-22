@@ -9,6 +9,8 @@ pub struct Program {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Def {
+    /// true when the def is marked `#` (its truth table gets computed)
+    pub top_level: bool,
     pub function: String,
     pub params: Vec<String>,
     pub expr: Expr,
@@ -126,6 +128,7 @@ impl Parser {
         let expr = self.parse_expr()?;
 
         Ok(Def {
+            top_level: false,
             function,
             params,
             expr,
@@ -308,6 +311,7 @@ mod tests {
             parse_ok("let f(x) = x"),
             Program {
                 defs: vec![Def {
+                    top_level: false,
                     function: "f".into(),
                     params: vec!["x".into()],
                     expr: var("x"),
@@ -333,6 +337,7 @@ mod tests {
             parse_ok("let f(x, y) = if x then f(y, false) else true"),
             Program {
                 defs: vec![Def {
+                    top_level: false,
                     function: "f".into(),
                     params: vec!["x".into(), "y".into()],
                     expr: Expr::IfThenElse {
@@ -355,6 +360,45 @@ mod tests {
     }
 
     #[test]
+    fn unmarked_def_is_not_top_level() {
+        let p = parse_ok("let f(x) = true");
+        assert!(!p.defs[0].top_level);
+    }
+
+    #[test]
+    fn hash_marker_marks_def_top_level() {
+        // `#` sits between `let` and the name; it must not add an AST node
+        let p = parse_ok("let #f(x) = true");
+        assert!(p.defs[0].top_level);
+        assert_eq!(p.defs[0].function, "f");
+        assert_eq!(p.defs[0].expr, Expr::Bool(true));
+    }
+
+    #[test]
+    fn top_level_flag_is_per_def() {
+        let p = parse_ok("let #f(x) = true let g(x) = false let #h(x) = true");
+        assert!(p.defs[0].top_level);
+        assert!(!p.defs[1].top_level);
+        assert!(p.defs[2].top_level);
+    }
+
+    #[test]
+    fn rejects_marker_before_let() {
+        // the marker attaches to the name, not the whole def
+        assert_eq!(err_span("#let f(x) = true"), 0..1); // `#`
+    }
+
+    #[test]
+    fn rejects_marker_after_name() {
+        assert_eq!(err_span("let f#(x) = true"), 5..6); // `#` where `(` expected
+    }
+
+    #[test]
+    fn rejects_marker_in_expression() {
+        assert_eq!(err_span("let f(x) = #true"), 11..12); // `#` can't start an expr
+    }
+
+    #[test]
     fn nesting_ifs_resolves_dangling_else_inward() {
         // `if a then if b then true else false else true`
         // the first `else` belongs to the inner if, the second to the outer
@@ -362,6 +406,7 @@ mod tests {
             parse_ok("let f(a, b) = if a then if b then true else false else true"),
             Program {
                 defs: vec![Def {
+                    top_level: false,
                     function: "f".into(),
                     params: vec!["a".into(), "b".into()],
                     expr: Expr::IfThenElse {
