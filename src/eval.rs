@@ -247,16 +247,31 @@ pub fn eval_expr(
                         });
                     }
 
-                    // we don't know the param type that gets passed
-                    // into the user defined predicate...
-                    // generate new variable table for function call
-                    let mut new_vars = VariableTable::new();
-                    for i in 0..args.len() {
-                        let value = eval_expr(&args[i], model, env, vars)?;
-                        new_vars.insert_variable(env, &def.params[i], value)?;
+                    // turn exprs into values, short circuit on first error
+                    let args: Vec<Value> = args
+                        .iter()
+                        .map(|expr| eval_expr(expr, model, env, vars))
+                        .collect::<Result<_, _>>()?;
+
+                    // see if this function + args combo is in the cache
+                    let key = CacheKey {
+                        function: def.function.clone(),
+                        args: args.clone(),
+                    };
+                    if let Some(value) = env.cache.get(&key) {
+                        return Ok(value.clone());
                     }
 
-                    Ok(eval_expr(&def.expr, model, env, &new_vars)?)
+                    // generate new variable table for the function call
+                    let mut new_vars = VariableTable::new();
+                    for (param, value) in def.params.iter().zip(&args) {
+                        new_vars.insert_variable(env, param, value.clone())?;
+                    }
+
+                    // evaluate and put new value in the cache
+                    let value = eval_expr(&def.expr, model, env, &new_vars)?;
+                    env.cache.insert(key, value);
+                    Ok(value)
                 }
             }
         }
