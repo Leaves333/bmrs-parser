@@ -113,6 +113,13 @@ impl Parser {
 
         self.expect(&Token::Let)?;
 
+        let top_level = if *self.peek() == Token::Hash {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         let name_span = self.span();
         let Token::Ident(function) = self.advance() else {
             return Err(ParseError {
@@ -128,7 +135,7 @@ impl Parser {
         let expr = self.parse_expr()?;
 
         Ok(Def {
-            top_level: false,
+            top_level,
             function,
             params,
             expr,

@@ -288,8 +288,12 @@ pub fn eval_program(
     let mut env = Env::new(&model.alphabet, &program.defs);
 
     // evaluate all functions
-    // TODO: only evaluate "top level" defs for the output in the future
     for def in program.defs {
+        // only evaluate "top level" defs for output
+        if !def.top_level {
+            continue;
+        }
+
         for i in 0..model.chars.len() {
             // evaluate this function at this position
             // note: under this model, we only cache results for user defined functions
