@@ -8,9 +8,26 @@ pub enum Value {
     Pos(usize),
 }
 
+#[derive(Debug)]
 pub enum EvalError {
+    /// a value of the wrong sort reached a position that requires
+    /// the other sort (e.g. an `if` condition that isn't a bool)
     TypeError(String),
+    /// a parameter name collides with an existing function name
     NameConflict(String),
+    /// a variable name is not bound in the current scope
+    UnboundVariable(String),
+    /// an applied function name has no definition and no builtin
+    UnboundFunction(String),
+    ArityMismatch {
+        function: String,
+        expected: usize,
+        got: usize,
+    },
+    /// `s` at the last position, or `p` at the first position
+    OutOfRange(String),
+    /// a call (transitively) re-entered itself with the same arguments
+    Recursion(String),
 }
 
 enum Entry {
@@ -156,4 +173,179 @@ pub fn eval_program(program: Program, model: StringModel) -> Result<(), EvalErro
     }
 
     todo!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+    use crate::parser::Parser;
+
+    /// parse `src`, build an env over `word`, evaluate `fname`'s body
+    /// with its (single) param bound to position `pos`.
+    fn eval_fn_at(src: &str, word: &str, fname: &str, pos: usize) -> Result<Value, EvalError> {
+        let tokens = tokenize(src).expect("lex error");
+        let program = Parser::new(tokens).parse().expect("parse error");
+        let model = StringModel::new(word);
+        let mut env = Env::new(&model.alphabet, &program.defs);
+        let def = program
+            .defs
+            .iter()
+            .find(|d| d.function == fname)
+            .expect("def not found");
+        let mut vars = VariableTable::new();
+        vars.insert_variable(&env, &def.params[0], Value::Pos(pos))?;
+        eval_expr(&def.expr, &model, &mut env, &vars)
+    }
+
+    fn ok(src: &str, word: &str, fname: &str, pos: usize) -> Value {
+        eval_fn_at(src, word, fname, pos).expect("eval error")
+    }
+
+    /// assert the eval fails with this error *kind*, ignoring the payload
+    macro_rules! assert_err {
+        ($src:expr, $word:expr, $fname:expr, $pos:expr, $variant:ident) => {
+            match eval_fn_at($src, $word, $fname, $pos) {
+                Err(EvalError::$variant { .. }) => {}
+                other => panic!(
+                    "expected EvalError::{}, got {:?}",
+                    stringify!($variant),
+                    other
+                ),
+            }
+        };
+    }
+
+    // small constructors for readability below
+    const T: Value = Value::Bool(true);
+    const F: Value = Value::Bool(false);
+    const fn p(i: usize) -> Value {
+        Value::Pos(i)
+    }
+
+    // --- happy path ---
+
+    #[test]
+    fn literals_and_variables() {
+        assert_eq!(ok("let f(x) = true", "a", "f", 0), T);
+        assert_eq!(ok("let f(x) = false", "a", "f", 0), F);
+        assert_eq!(ok("let f(x) = x", "ab", "f", 1), p(1));
+    }
+
+    #[test]
+    fn symbol_predicates_read_the_word() {
+        // word "ab": pos 0 is a, pos 1 is b
+        assert_eq!(ok("let f(x) = a(x)", "ab", "f", 0), T);
+        assert_eq!(ok("let f(x) = a(x)", "ab", "f", 1), F);
+    }
+
+    #[test]
+    fn successor_and_predecessor() {
+        assert_eq!(ok("let f(x) = s(x)", "ab", "f", 0), p(1));
+        assert_eq!(ok("let f(x) = p(x)", "ab", "f", 1), p(0));
+    }
+
+    #[test]
+    fn composition_applies_predicates_to_positions() {
+        // "ab": successor of 0 is 'b'
+        assert_eq!(ok("let f(x) = b(s(x))", "ab", "f", 0), T);
+        assert_eq!(ok("let f(x) = a(s(x))", "ab", "f", 0), F);
+    }
+
+    #[test]
+    fn if_selects_branch_by_condition() {
+        // position-valued branches selected by a bool condition
+        let src = "let f(x) = if a(x) then s(x) else p(x)";
+        assert_eq!(ok(src, "ab", "f", 0), p(1)); // pos 0 is a -> successor
+        assert_eq!(ok(src, "ab", "f", 1), p(0)); // pos 1 is b -> predecessor
+    }
+
+    #[test]
+    fn dead_branch_is_not_evaluated() {
+        // s(s(0)) runs off "ab", but lives in the untaken branch
+        let src = "let f(x) = if true then a(x) else s(s(x))";
+        assert_eq!(ok(src, "ab", "f", 0), T);
+    }
+
+    #[test]
+    fn user_def_call_binds_params_in_its_own_frame() {
+        // exercises: args evaluated in caller scope, body sees callee's x
+        let src = "let not(x) = if x then false else true
+                   let f(x) = not(a(x))";
+        assert_eq!(ok(src, "ab", "f", 0), F);
+        assert_eq!(ok(src, "ab", "f", 1), T);
+    }
+
+    #[test]
+    fn chained_user_defs() {
+        let src = "let foo(x) = bar(x)
+                   let bar(x) = a(x)";
+        assert_eq!(ok(src, "ab", "foo", 0), T);
+        assert_eq!(ok(src, "ab", "foo", 1), F);
+    }
+
+    #[test]
+    fn user_def_shadows_symbol_predicate() {
+        // insertion order in Env::new: defs after natives -> defs win
+        assert_eq!(ok("let b(x) = false", "ab", "b", 1), F);
+    }
+
+    // --- error kinds ---
+
+    #[test]
+    fn unbound_variable() {
+        assert_err!("let f(x) = y", "ab", "f", 0, UnboundVariable);
+    }
+
+    #[test]
+    fn unbound_function() {
+        assert_err!("let f(x) = q(x)", "ab", "f", 0, UnboundFunction);
+    }
+
+    #[test]
+    fn arity_mismatch() {
+        let src = "let f(x) = g(x, x)
+                   let g(y) = y";
+        assert_err!(src, "ab", "f", 0, ArityMismatch);
+    }
+
+    #[test]
+    fn successor_out_of_range_at_word_end() {
+        assert_err!("let f(x) = s(x)", "ab", "f", 1, OutOfRange);
+    }
+
+    #[test]
+    fn predecessor_out_of_range_at_word_start() {
+        assert_err!("let f(x) = p(x)", "ab", "f", 0, OutOfRange);
+    }
+
+    #[test]
+    fn if_condition_must_be_bool() {
+        assert_err!(
+            "let f(x) = if s(x) then true else false",
+            "ab",
+            "f",
+            0,
+            TypeError
+        );
+    }
+
+    #[test]
+    fn symbol_predicate_needs_a_position() {
+        // not(x) is bool-valued, but a(..) expects a position
+        let src = "let not(x) = if x then false else true
+                   let f(x) = a(not(x))";
+        assert_err!(src, "ab", "f", 0, TypeError);
+    }
+
+    #[test]
+    fn param_conflicting_with_symbol_predicate_is_name_conflict() {
+        // param named `a` vs the symbol predicate injected by the word
+        assert_err!("let f(a) = x", "ab", "f", 0, NameConflict);
+    }
+
+    #[test]
+    fn param_conflicting_with_builtin_is_name_conflict() {
+        assert_err!("let f(s) = true", "ab", "f", 0, NameConflict);
+    }
 }
