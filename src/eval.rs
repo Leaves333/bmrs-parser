@@ -10,6 +10,7 @@ pub enum Value {
 
 pub enum EvalError {
     TypeError(String),
+    NameConflict(String),
 }
 
 enum Entry {
@@ -26,33 +27,65 @@ struct CacheKey {
 }
 
 struct Env {
-    symbol_table: HashMap<String, Entry>,
-    cache: HashMap<CacheKey, Value>,
+    pub function_table: HashMap<String, Entry>,
+    pub cache: HashMap<CacheKey, Value>,
 }
 
 impl Env {
     fn new(alphabet: &Vec<char>, defs: &Vec<Def>) -> Self {
         let mut env = Env {
-            symbol_table: HashMap::new(),
+            function_table: HashMap::new(),
             cache: HashMap::new(),
         };
 
         // insert predecessor/successor functions into env
-        env.symbol_table.insert("s".into(), Entry::Successor);
-        env.symbol_table.insert("p".into(), Entry::Predecessor);
+        env.function_table.insert("s".into(), Entry::Successor);
+        env.function_table.insert("p".into(), Entry::Predecessor);
 
         // insert issymbol functions for each char
         for c in alphabet {
-            env.symbol_table.insert((*c).into(), Entry::IsSymbol(*c));
+            env.function_table.insert((*c).into(), Entry::IsSymbol(*c));
         }
 
         // insert user defs
         for def in defs {
-            env.symbol_table
+            env.function_table
                 .insert(def.function.clone(), Entry::User(def.clone()));
         }
 
         env
+    }
+}
+
+/// maps variable names to values
+struct VariableTable {
+    table: HashMap<String, Value>,
+}
+
+impl VariableTable {
+    fn new() -> Self {
+        Self {
+            table: HashMap::new(),
+        }
+    }
+
+    fn insert_variable(&mut self, env: &Env, name: &str, value: Value) -> Result<(), EvalError> {
+        if env.function_table.contains_key(name) {
+            return Err(EvalError::NameConflict(format!(
+                "symbol {} already exists as a function",
+                name
+            )));
+        }
+
+        if self.table.contains_key(name) {
+            return Err(EvalError::NameConflict(format!(
+                "symbol {} already exists as a variable",
+                name
+            )));
+        }
+
+        self.table.insert(name.into(), value);
+        Ok(())
     }
 }
 
@@ -74,7 +107,12 @@ impl StringModel {
     }
 }
 
-pub fn eval_expr(expr: &Expr, model: &StringModel) -> Result<Value, EvalError> {
+pub fn eval_expr(
+    expr: &Expr,
+    model: &StringModel,
+    env: &mut Env,
+    vars: &VariableTable,
+) -> Result<Value, EvalError> {
     todo!()
 }
 
@@ -99,7 +137,21 @@ pub fn eval_program(program: Program, model: StringModel) -> Result<(), EvalErro
                 continue;
             }
 
-            env.cache.insert(key, eval_expr(&def.expr, &model)?);
+            // check function arity
+            // (top level functions must only take one argument)
+            if def.params.len() != 1 {
+                return Err(EvalError::TypeError(
+                    "top level functions can only take one argument!".into(),
+                ));
+            }
+
+            // map variables to names
+            let mut vars = VariableTable::new();
+            vars.insert_variable(&env, &def.params[0], Value::Pos(i))?;
+
+            // eval the result and cache it
+            let eval_result = eval_expr(&def.expr, &model, &mut env, &vars)?;
+            env.cache.insert(key, eval_result);
         }
     }
 
