@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::parser::{Def, Expr, Program};
+use crate::{
+    eval::EvalError::UnboundVariable,
+    parser::{Def, Expr, Program},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
@@ -10,14 +13,9 @@ pub enum Value {
 
 #[derive(Debug)]
 pub enum EvalError {
-    /// a value of the wrong sort reached a position that requires
-    /// the other sort (e.g. an `if` condition that isn't a bool)
     TypeError(String),
-    /// a parameter name collides with an existing function name
     NameConflict(String),
-    /// a variable name is not bound in the current scope
     UnboundVariable(String),
-    /// an applied function name has no definition and no builtin
     UnboundFunction(String),
     ArityMismatch {
         function: String,
@@ -26,10 +24,10 @@ pub enum EvalError {
     },
     /// `s` at the last position, or `p` at the first position
     OutOfRange(String),
-    /// a call (transitively) re-entered itself with the same arguments
     Recursion(String),
 }
 
+#[derive(Clone)]
 enum Entry {
     User(Def),
     Successor,
@@ -124,13 +122,145 @@ impl StringModel {
     }
 }
 
+fn is_symbol_fn(pos: Value, target: char, model: &StringModel) -> Result<Value, EvalError> {
+    let Value::Pos(i) = pos else {
+        return Err(EvalError::TypeError(
+            "is symbol function received a bool, but expected a domain element!".into(),
+        ));
+    };
+
+    match model.chars.get(i) {
+        Some(c) => Ok(Value::Bool(*c == target)),
+        None => Err(EvalError::OutOfRange("oops".into())),
+    }
+}
+
+fn predecessor_fn(pos: Value, model: &StringModel) -> Result<Value, EvalError> {
+    let Value::Pos(i) = pos else {
+        return Err(EvalError::TypeError(
+            "is symbol function received a bool, but expected a domain element!".into(),
+        ));
+    };
+
+    if i == 0 {
+        Err(EvalError::OutOfRange(
+            "attempted to predecessor past start of string!".into(),
+        ))
+    } else {
+        Ok(Value::Pos(i - 1))
+    }
+}
+
+fn successor_fn(pos: Value, model: &StringModel) -> Result<Value, EvalError> {
+    let Value::Pos(i) = pos else {
+        return Err(EvalError::TypeError(
+            "is symbol function received a bool, but expected a domain element!".into(),
+        ));
+    };
+
+    if i == model.chars.len() - 1 {
+        Err(EvalError::OutOfRange(
+            "attempted to successor past end of string!".into(),
+        ))
+    } else {
+        Ok(Value::Pos(i + 1))
+    }
+}
+
 pub fn eval_expr(
     expr: &Expr,
     model: &StringModel,
     env: &mut Env,
     vars: &VariableTable,
 ) -> Result<Value, EvalError> {
-    todo!()
+    match expr {
+        Expr::Bool(b) => Ok(Value::Bool(*b)),
+        Expr::Variable(name) => match vars.table.get(name) {
+            Some(v) => Ok(v.clone()),
+            None => Err(UnboundVariable(name.into())),
+        },
+        Expr::IfThenElse {
+            if_clause,
+            then_clause,
+            else_clause,
+        } => {
+            let Value::Bool(cond) = eval_expr(if_clause, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "conditional in if statement was not a bool!".into(),
+                ));
+            };
+
+            if cond {
+                Ok(eval_expr(then_clause, model, env, vars)?)
+            } else {
+                Ok(eval_expr(else_clause, model, env, vars)?)
+            }
+        }
+        Expr::Application { function, args } => {
+            let Some(entry) = env.function_table.get(function).cloned() else {
+                return Err(EvalError::UnboundFunction(function.clone()));
+            };
+
+            match entry {
+                Entry::Successor => {
+                    if args.len() != 1 {
+                        return Err(EvalError::ArityMismatch {
+                            function: "successor".into(),
+                            expected: 1,
+                            got: args.len(),
+                        });
+                    }
+
+                    let arg = eval_expr(&args[0], model, env, vars)?;
+                    Ok(successor_fn(arg, model)?)
+                }
+                Entry::Predecessor => {
+                    if args.len() != 1 {
+                        return Err(EvalError::ArityMismatch {
+                            function: "predecessor".into(),
+                            expected: 1,
+                            got: args.len(),
+                        });
+                    }
+
+                    let arg = eval_expr(&args[0], model, env, vars)?;
+                    Ok(predecessor_fn(arg, model)?)
+                }
+                Entry::IsSymbol(target) => {
+                    if args.len() != 1 {
+                        return Err(EvalError::ArityMismatch {
+                            function: format!("is symbol {target}"),
+                            expected: 1,
+                            got: args.len(),
+                        });
+                    }
+
+                    let arg = eval_expr(&args[0], model, env, vars)?;
+                    Ok(is_symbol_fn(arg, target, model)?)
+                }
+                Entry::User(def) => {
+                    if args.len() != def.params.len() {
+                        return Err(EvalError::ArityMismatch {
+                            function: def.function,
+                            expected: def.params.len(),
+                            got: args.len(),
+                        });
+                    }
+
+                    // we don't know the param type that gets passed
+                    // into the user defined predicate...
+                    // generate new variable table for function call
+                    let mut new_vars = VariableTable::new();
+                    for i in 0..args.len() {
+                        let value = eval_expr(&args[i], model, env, vars)?;
+                        new_vars.insert_variable(env, &def.params[i], value)?;
+                    }
+
+                    Ok(eval_expr(&def.expr, model, env, &new_vars)?)
+                }
+            }
+        }
+    }
 }
 
 // what should the output of evaluating a program be?
@@ -144,6 +274,7 @@ pub fn eval_program(program: Program, model: StringModel) -> Result<(), EvalErro
     for def in program.defs {
         for i in 0..model.chars.len() {
             // evaluate this function at this position
+            // note: under this model, we only cache results for user defined functions
             let key = CacheKey {
                 function: def.function.clone(),
                 args: vec![Value::Pos(i)],
