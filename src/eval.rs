@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use crate::{
     eval::EvalError::UnboundVariable,
@@ -9,6 +10,26 @@ use crate::{
 pub enum Value {
     Bool(bool),
     Pos(usize),
+    LeftFish,
+    RightFish,
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Bool(b) => {
+                if *b {
+                    write!(f, "⊤")
+                } else {
+                    write!(f, "⊥")
+                }
+            }
+            // pos should be 1 indexed when displayed
+            Value::Pos(i) => write!(f, "{}", i + 1),
+            Value::LeftFish => write!(f, "⋊"),
+            Value::RightFish => write!(f, "⋉"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -120,6 +141,10 @@ impl StringModel {
         }
         StringModel { chars, alphabet }
     }
+
+    pub fn len(&self) -> usize {
+        self.chars.len()
+    }
 }
 
 fn is_symbol_fn(pos: Value, target: char, model: &StringModel) -> Result<Value, EvalError> {
@@ -159,7 +184,7 @@ fn successor_fn(pos: Value, model: &StringModel) -> Result<Value, EvalError> {
             "successor function received a bool, but expected a domain element!".into(),
         )),
         Value::Pos(i) => {
-            if i + 1 >= model.chars.len() {
+            if i + 1 >= model.len() {
                 Ok(Value::RightFish)
             } else {
                 Ok(Value::Pos(i + 1))
@@ -284,20 +309,20 @@ fn eval_expr(
 // what should the output of evaluating a program be?
 // a truth table for each function, for each position
 pub fn eval_program(
-    program: Program,
-    model: StringModel,
+    program: &Program,
+    model: &StringModel,
 ) -> Result<HashMap<CacheKey, Value>, EvalError> {
     // prepopulate env based on string model and defined functions
     let mut env = Env::new(&model.alphabet, &program.defs);
 
     // evaluate all functions
-    for def in program.defs {
+    for def in &program.defs {
         // only evaluate "top level" defs for output
         if !def.top_level {
             continue;
         }
 
-        for i in 0..model.chars.len() {
+        for i in 0..model.len() {
             // evaluate this function at this position
             // note: under this model, we only cache results for user defined functions
             let key = CacheKey {
@@ -363,7 +388,7 @@ mod tests {
     fn eval_cache_result(src: &str, word: &str) -> Result<HashMap<CacheKey, Value>, EvalError> {
         let tokens = tokenize(src).expect("lex error");
         let program = Parser::new(tokens).parse().expect("parse error");
-        eval_program(program, StringModel::new(word))
+        eval_program(&program, &StringModel::new(word))
     }
 
     fn eval_cache(src: &str, word: &str) -> HashMap<CacheKey, Value> {
