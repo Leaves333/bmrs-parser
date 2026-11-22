@@ -123,51 +123,54 @@ impl StringModel {
 }
 
 fn is_symbol_fn(pos: Value, target: char, model: &StringModel) -> Result<Value, EvalError> {
-    let Value::Pos(i) = pos else {
-        return Err(EvalError::TypeError(
+    match pos {
+        Value::Bool(_) => Err(EvalError::TypeError(
             "is symbol function received a bool, but expected a domain element!".into(),
-        ));
-    };
-
-    match model.chars.get(i) {
-        Some(c) => Ok(Value::Bool(*c == target)),
-        None => Err(EvalError::OutOfRange("oops".into())),
+        )),
+        Value::Pos(i) => match model.chars.get(i) {
+            Some(c) => Ok(Value::Bool(*c == target)),
+            None => Err(EvalError::OutOfRange(format!("index {i} is out of range!"))),
+        },
+        Value::LeftFish => Ok(Value::Bool(false)),
+        Value::RightFish => Ok(Value::Bool(false)),
     }
 }
 
 fn predecessor_fn(pos: Value, model: &StringModel) -> Result<Value, EvalError> {
-    let Value::Pos(i) = pos else {
-        return Err(EvalError::TypeError(
-            "is symbol function received a bool, but expected a domain element!".into(),
-        ));
-    };
-
-    if i == 0 {
-        Err(EvalError::OutOfRange(
-            "attempted to predecessor past start of string!".into(),
-        ))
-    } else {
-        Ok(Value::Pos(i - 1))
+    match pos {
+        Value::Bool(_) => Err(EvalError::TypeError(
+            "predecessor function received a bool, but expected a domain element!".into(),
+        )),
+        Value::Pos(i) => {
+            if i == 0 {
+                Ok(Value::LeftFish)
+            } else {
+                Ok(Value::Pos(i - 1))
+            }
+        }
+        Value::LeftFish => Ok(Value::LeftFish),
+        Value::RightFish => Ok(Value::RightFish),
     }
 }
 
 fn successor_fn(pos: Value, model: &StringModel) -> Result<Value, EvalError> {
-    let Value::Pos(i) = pos else {
-        return Err(EvalError::TypeError(
-            "is symbol function received a bool, but expected a domain element!".into(),
-        ));
-    };
-
-    if i == model.chars.len() - 1 {
-        Err(EvalError::OutOfRange(
-            "attempted to successor past end of string!".into(),
-        ))
-    } else {
-        Ok(Value::Pos(i + 1))
+    match pos {
+        Value::Bool(_) => Err(EvalError::TypeError(
+            "successor function received a bool, but expected a domain element!".into(),
+        )),
+        Value::Pos(i) => {
+            if i + 1 >= model.chars.len() {
+                Ok(Value::RightFish)
+            } else {
+                Ok(Value::Pos(i + 1))
+            }
+        }
+        Value::LeftFish => Ok(Value::LeftFish),
+        Value::RightFish => Ok(Value::RightFish),
     }
 }
 
-pub fn eval_expr(
+fn eval_expr(
     expr: &Expr,
     model: &StringModel,
     env: &mut Env,
@@ -434,8 +437,8 @@ mod tests {
 
     #[test]
     fn dead_branch_is_not_evaluated() {
-        // s(s(0)) runs off "ab", but lives in the untaken branch
-        let src = "let f(x) = if true then a(x) else s(s(x))";
+        // a(true) is a TypeError if evaluated, but lives in the untaken branch
+        let src = "let f(x) = if true then a(x) else a(true)";
         assert_eq!(ok(src, "ab", "f", 0), T);
     }
 
@@ -482,13 +485,36 @@ mod tests {
     }
 
     #[test]
-    fn successor_out_of_range_at_word_end() {
-        assert_err!("let f(x) = s(x)", "ab", "f", 1, OutOfRange);
+    fn successor_at_word_end_returns_right_fish() {
+        assert_eq!(ok("let f(x) = s(x)", "ab", "f", 1), Value::RightFish);
     }
 
     #[test]
-    fn predecessor_out_of_range_at_word_start() {
-        assert_err!("let f(x) = p(x)", "ab", "f", 0, OutOfRange);
+    fn predecessor_at_word_start_returns_left_fish() {
+        assert_eq!(ok("let f(x) = p(x)", "ab", "f", 0), Value::LeftFish);
+    }
+
+    #[test]
+    fn fish_absorb_successor_and_predecessor() {
+        // once off the edge, walking can never get back onto the word
+        assert_eq!(ok("let f(x) = p(p(x))", "ab", "f", 0), Value::LeftFish);
+        assert_eq!(ok("let f(x) = s(p(x))", "ab", "f", 0), Value::LeftFish);
+        assert_eq!(ok("let f(x) = s(s(x))", "ab", "f", 1), Value::RightFish);
+        assert_eq!(ok("let f(x) = p(s(x))", "ab", "f", 1), Value::RightFish);
+    }
+
+    #[test]
+    fn symbol_predicates_are_false_on_fish() {
+        // no character in the alphabet matches an out-of-bounds position
+        assert_eq!(ok("let f(x) = a(p(x))", "ab", "f", 0), F);
+        assert_eq!(ok("let f(x) = b(s(x))", "ab", "f", 1), F);
+    }
+
+    #[test]
+    fn fish_on_both_sides_of_a_single_char_word() {
+        // "a": pos 0 is bracketed by LeftFish and RightFish
+        assert_eq!(ok("let f(x) = p(x)", "a", "f", 0), Value::LeftFish);
+        assert_eq!(ok("let f(x) = s(x)", "a", "f", 0), Value::RightFish);
     }
 
     #[test]
@@ -534,6 +560,18 @@ mod tests {
         expected.insert(key("g", vec![p(1)]), T);
         // exactly the top-level entries — built-in applications (a, b) are
         // not memoized, only user-defined results
+        assert_eq!(cache, expected);
+    }
+
+    #[test]
+    fn fish_values_appear_in_truth_tables() {
+        // the endpoints of "ab" fall off into fish
+        let cache = eval_cache("let #f(x) = p(x)\nlet #g(x) = s(x)", "ab");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), Value::LeftFish);
+        expected.insert(key("f", vec![p(1)]), p(0));
+        expected.insert(key("g", vec![p(0)]), p(1));
+        expected.insert(key("g", vec![p(1)]), Value::RightFish);
         assert_eq!(cache, expected);
     }
 
