@@ -3,6 +3,9 @@ use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq, Logos)]
 #[logos(skip r"[ \t\r\n\f]+")]
+// line comments: `--` until the end of the line.
+// greedy matching is fine here: inputs are small programs.
+#[logos(skip(r"--[^\n]*", allow_greedy = true))]
 pub enum Token {
     #[token("let")]
     Let,
@@ -203,6 +206,43 @@ mod tests {
             toks("let\t\r\n\x0C f = true"),
             [Let, Ident("f".into()), Equals, True, EOF]
         );
+    }
+
+    #[test]
+    fn comment_only_program() {
+        assert_eq!(toks("-- hello"), [EOF]);
+        assert_eq!(toks("--\n"), [EOF]);
+        assert_eq!(toks("--\n\n-- another\n"), [EOF]);
+    }
+
+    #[test]
+    fn trailing_comment_after_code() {
+        assert_eq!(
+            toks("let f(x) = true -- done"),
+            [Let, Ident("f".into()), LeftParen, Ident("x".into()), RightParen, Equals, True, EOF]
+        );
+        // no whitespace needed before the comment
+        assert_eq!(toks("true--x"), [True, EOF]);
+    }
+
+    #[test]
+    fn comment_between_tokens() {
+        assert_eq!(
+            toks("let f(x) = -- c\n  true"),
+            [Let, Ident("f".into()), LeftParen, Ident("x".into()), RightParen, Equals, True, EOF]
+        );
+    }
+
+    #[test]
+    fn comment_at_eof_without_newline() {
+        assert_eq!(toks("true --"), [True, EOF]);
+    }
+
+    #[test]
+    fn single_dash_is_lex_error() {
+        let err = tokenize("-").expect_err("expected lex error");
+        assert_eq!(err.found, "-");
+        assert_eq!(err.span, 0..1);
     }
 
     #[test]

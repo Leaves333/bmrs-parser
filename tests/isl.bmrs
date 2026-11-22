@@ -1,2 +1,3 @@
+-- osl variant of a -> b / b_
 let #a'(x) = if b(p(x)) then false else a(x)
-let #b'(x) = if b(p(x)) then true else b(x)
+let #b'(x) = if b(p(x)) then true else b(x) -- comment text hi

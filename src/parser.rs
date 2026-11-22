@@ -367,6 +367,31 @@ mod tests {
     }
 
     #[test]
+    fn comment_only_program() {
+        assert_eq!(
+            parse_ok("-- just a comment\n-- and another"),
+            Program { defs: vec![] }
+        );
+    }
+
+    #[test]
+    fn comments_do_not_change_the_ast() {
+        // same program with and without comments must parse identically
+        assert_eq!(
+            parse_ok(
+                "-- header\nlet f(x) = x -- trailing\nlet #g(y) = -- inline\n  if y then g(y) else true"
+            ),
+            parse_ok("let f(x) = x let #g(y) = if y then g(y) else true")
+        );
+    }
+
+    #[test]
+    fn parse_error_span_skips_over_comments() {
+        // the comment before the offending token must not shift its span
+        assert_eq!(err_span("let f(x) = x\n-- comment\nlet = true"), 28..29);
+    }
+
+    #[test]
     fn unmarked_def_is_not_top_level() {
         let p = parse_ok("let f(x) = true");
         assert!(!p.defs[0].top_level);
