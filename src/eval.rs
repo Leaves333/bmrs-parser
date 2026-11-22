@@ -281,6 +281,14 @@ fn eval_expr(
                         .map(|expr| eval_expr(expr, model, env, vars))
                         .collect::<Result<_, _>>()?;
 
+                    // if any args are fish, it should automatically return false
+                    if args
+                        .iter()
+                        .any(|v| matches!(v, Value::LeftFish | Value::RightFish))
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+
                     // see if this function + args combo is in the cache
                     let key = CacheKey {
                         function: def.function.clone(),
