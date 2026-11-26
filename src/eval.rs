@@ -412,40 +412,42 @@ pub fn eval_program(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::tokenize;
-    use crate::parser::Parser;
+    use crate::test_util::{and, app, def, ite, lit, not, or, tdef, var};
 
-    /// parse `src`, build an env over `word`, evaluate `fname`'s body
-    /// with its (single) param bound to position `pos`.
-    fn eval_fn_at(src: &str, word: &str, fname: &str, pos: usize) -> Result<Value, EvalError> {
-        let tokens = tokenize(src).expect("lex error");
-        let program = Parser::new(tokens).parse().expect("parse error");
+    // NOTE: these are *unit* tests for the evaluator. They build `Expr`/`Def`
+    // trees directly (via `crate::test_util`) instead of lexing + parsing source,
+    // so the evaluator is tested independently of the lexer/parser. The end-to-end
+    // (source text -> truth table) behaviour belongs in integration tests.
+
+    /// Evaluate `fname`'s body from `defs` over `word`, binding its single
+    /// parameter to position `pos`.
+    fn eval_at(defs: &[Def], fname: &str, word: &str, pos: usize) -> Result<Value, EvalError> {
         let model = StringModel::new(word);
-        let mut env = Env::new(&model.alphabet, &program.defs);
-        let def = program
-            .defs
-            .iter()
-            .find(|d| d.function == fname)
-            .expect("def not found");
+        let defs_vec = defs.to_vec();
+        let mut env = Env::new(&model.alphabet, &defs_vec);
+        let def = defs.iter().find(|d| d.function == fname).expect("def not found");
         let mut vars = VariableTable::new();
         vars.insert_variable(&env, &def.params[0], Value::Pos(pos))?;
         eval_expr(&def.expr, &model, &mut env, &vars)
     }
 
-    fn ok(src: &str, word: &str, fname: &str, pos: usize) -> Value {
-        eval_fn_at(src, word, fname, pos).expect("eval error")
+    fn ok_at(defs: &[Def], fname: &str, word: &str, pos: usize) -> Value {
+        eval_at(defs, fname, word, pos).expect("eval error")
     }
 
-    /// parse `src`, evaluate the whole program over `word`, and return
-    /// the resulting memo cache.
-    fn eval_cache_result(src: &str, word: &str) -> Result<HashMap<CacheKey, Value>, EvalError> {
-        let tokens = tokenize(src).expect("lex error");
-        let program = Parser::new(tokens).parse().expect("parse error");
-        eval_program(&program, &StringModel::new(word))
+    /// convenience: evaluate a single `let f(x) = <body>` at `pos`.
+    fn ok_body(body: Expr, word: &str, pos: usize) -> Value {
+        let d = def("f", &["x"], body);
+        ok_at(&[d], "f", word, pos)
     }
 
-    fn eval_cache(src: &str, word: &str) -> HashMap<CacheKey, Value> {
-        eval_cache_result(src, word).expect("eval error")
+    /// whole-program evaluation over `word`.
+    fn cache_result_of(defs: Vec<Def>, word: &str) -> Result<HashMap<CacheKey, Value>, EvalError> {
+        eval_program(&Program { defs }, &StringModel::new(word))
+    }
+
+    fn cache_of(defs: Vec<Def>, word: &str) -> HashMap<CacheKey, Value> {
+        cache_result_of(defs, word).expect("eval error")
     }
 
     fn key(fname: &str, args: Vec<Value>) -> CacheKey {
@@ -457,8 +459,8 @@ mod tests {
 
     /// assert the eval fails with this error *kind*, ignoring the payload
     macro_rules! assert_err {
-        ($src:expr, $word:expr, $fname:expr, $pos:expr, $variant:ident) => {
-            match eval_fn_at($src, $word, $fname, $pos) {
+        ($defs:expr, $fname:expr, $word:expr, $pos:expr, $variant:ident) => {
+            match eval_at(&$defs, $fname, $word, $pos) {
                 Err(EvalError::$variant { .. }) => {}
                 other => panic!(
                     "expected EvalError::{}, got {:?}",
@@ -480,127 +482,149 @@ mod tests {
 
     #[test]
     fn literals_and_variables() {
-        assert_eq!(ok("let f(x) = true", "a", "f", 0), T);
-        assert_eq!(ok("let f(x) = false", "a", "f", 0), F);
-        assert_eq!(ok("let f(x) = x", "ab", "f", 1), p(1));
+        assert_eq!(ok_body(lit(true), "a", 0), T);
+        assert_eq!(ok_body(lit(false), "a", 0), F);
+        assert_eq!(ok_body(var("x"), "ab", 1), p(1));
     }
 
     #[test]
     fn symbol_predicates_read_the_word() {
         // word "ab": pos 0 is a, pos 1 is b
-        assert_eq!(ok("let f(x) = a(x)", "ab", "f", 0), T);
-        assert_eq!(ok("let f(x) = a(x)", "ab", "f", 1), F);
+        assert_eq!(ok_body(app("a", vec![var("x")]), "ab", 0), T);
+        assert_eq!(ok_body(app("a", vec![var("x")]), "ab", 1), F);
     }
 
     #[test]
     fn successor_and_predecessor() {
-        assert_eq!(ok("let f(x) = s(x)", "ab", "f", 0), p(1));
-        assert_eq!(ok("let f(x) = p(x)", "ab", "f", 1), p(0));
+        assert_eq!(ok_body(app("s", vec![var("x")]), "ab", 0), p(1));
+        assert_eq!(ok_body(app("p", vec![var("x")]), "ab", 1), p(0));
     }
 
     #[test]
     fn composition_applies_predicates_to_positions() {
         // "ab": successor of 0 is 'b'
-        assert_eq!(ok("let f(x) = b(s(x))", "ab", "f", 0), T);
-        assert_eq!(ok("let f(x) = a(s(x))", "ab", "f", 0), F);
+        assert_eq!(ok_body(app("b", vec![app("s", vec![var("x")])]), "ab", 0), T);
+        assert_eq!(ok_body(app("a", vec![app("s", vec![var("x")])]), "ab", 0), F);
     }
 
     #[test]
     fn if_selects_branch_by_condition() {
         // position-valued branches selected by a bool condition
-        let src = "let f(x) = if a(x) then s(x) else p(x)";
-        assert_eq!(ok(src, "ab", "f", 0), p(1)); // pos 0 is a -> successor
-        assert_eq!(ok(src, "ab", "f", 1), p(0)); // pos 1 is b -> predecessor
+        let body = ite(
+            app("a", vec![var("x")]),
+            app("s", vec![var("x")]),
+            app("p", vec![var("x")]),
+        );
+        assert_eq!(ok_body(body.clone(), "ab", 0), p(1)); // pos 0 is a -> successor
+        assert_eq!(ok_body(body, "ab", 1), p(0)); // pos 1 is b -> predecessor
     }
 
     #[test]
     fn dead_branch_is_not_evaluated() {
         // a(true) is a TypeError if evaluated, but lives in the untaken branch
-        let src = "let f(x) = if true then a(x) else a(true)";
-        assert_eq!(ok(src, "ab", "f", 0), T);
+        let body = ite(lit(true), app("a", vec![var("x")]), app("a", vec![lit(true)]));
+        assert_eq!(ok_body(body, "ab", 0), T);
     }
 
     #[test]
     fn user_def_call_binds_params_in_its_own_frame() {
         // exercises: args evaluated in caller scope, body sees callee's x
-        let src = "let not(x) = if x then false else true
-                   let f(x) = not(a(x))";
-        assert_eq!(ok(src, "ab", "f", 0), F);
-        assert_eq!(ok(src, "ab", "f", 1), T);
+        let defs = vec![
+            def("not", &["x"], ite(var("x"), lit(false), lit(true))),
+            def("f", &["x"], app("not", vec![app("a", vec![var("x")])])),
+        ];
+        assert_eq!(ok_at(&defs, "f", "ab", 0), F);
+        assert_eq!(ok_at(&defs, "f", "ab", 1), T);
     }
 
     #[test]
     fn chained_user_defs() {
-        let src = "let foo(x) = bar(x)
-                   let bar(x) = a(x)";
-        assert_eq!(ok(src, "ab", "foo", 0), T);
-        assert_eq!(ok(src, "ab", "foo", 1), F);
+        let defs = vec![
+            def("foo", &["x"], app("bar", vec![var("x")])),
+            def("bar", &["x"], app("a", vec![var("x")])),
+        ];
+        assert_eq!(ok_at(&defs, "foo", "ab", 0), T);
+        assert_eq!(ok_at(&defs, "foo", "ab", 1), F);
     }
 
     #[test]
     fn user_def_shadows_symbol_predicate() {
         // insertion order in Env::new: defs after natives -> defs win
-        assert_eq!(ok("let b(x) = false", "ab", "b", 1), F);
+        let defs = vec![def("b", &["x"], lit(false))];
+        assert_eq!(ok_at(&defs, "b", "ab", 1), F);
     }
 
     // --- error kinds ---
 
     #[test]
     fn unbound_variable() {
-        assert_err!("let f(x) = y", "ab", "f", 0, UnboundVariable);
+        assert_err!(vec![def("f", &["x"], var("y"))], "f", "ab", 0, UnboundVariable);
     }
 
     #[test]
     fn unbound_function() {
-        assert_err!("let f(x) = q(x)", "ab", "f", 0, UnboundFunction);
+        assert_err!(
+            vec![def("f", &["x"], app("q", vec![var("x")]))],
+            "f",
+            "ab",
+            0,
+            UnboundFunction
+        );
     }
 
     #[test]
     fn arity_mismatch() {
-        let src = "let f(x) = g(x, x)
-                   let g(y) = y";
-        assert_err!(src, "ab", "f", 0, ArityMismatch);
+        let defs = vec![
+            def("f", &["x"], app("g", vec![var("x"), var("x")])),
+            def("g", &["y"], var("y")),
+        ];
+        assert_err!(defs, "f", "ab", 0, ArityMismatch);
     }
 
     #[test]
     fn successor_at_word_end_returns_right_fish() {
-        assert_eq!(ok("let f(x) = s(x)", "ab", "f", 1), Value::RightFish);
+        assert_eq!(ok_body(app("s", vec![var("x")]), "ab", 1), Value::RightFish);
     }
 
     #[test]
     fn predecessor_at_word_start_returns_left_fish() {
-        assert_eq!(ok("let f(x) = p(x)", "ab", "f", 0), Value::LeftFish);
+        assert_eq!(ok_body(app("p", vec![var("x")]), "ab", 0), Value::LeftFish);
     }
 
     #[test]
     fn fish_absorb_successor_and_predecessor() {
         // once off the edge, walking can never get back onto the word
-        assert_eq!(ok("let f(x) = p(p(x))", "ab", "f", 0), Value::LeftFish);
-        assert_eq!(ok("let f(x) = s(p(x))", "ab", "f", 0), Value::LeftFish);
-        assert_eq!(ok("let f(x) = s(s(x))", "ab", "f", 1), Value::RightFish);
-        assert_eq!(ok("let f(x) = p(s(x))", "ab", "f", 1), Value::RightFish);
+        let x = var("x");
+        assert_eq!(ok_body(app("p", vec![app("p", vec![x.clone()])]), "ab", 0), Value::LeftFish);
+        assert_eq!(ok_body(app("s", vec![app("p", vec![x.clone()])]), "ab", 0), Value::LeftFish);
+        assert_eq!(ok_body(app("s", vec![app("s", vec![x.clone()])]), "ab", 1), Value::RightFish);
+        assert_eq!(ok_body(app("p", vec![app("s", vec![x])]), "ab", 1), Value::RightFish);
     }
 
     #[test]
     fn symbol_predicates_are_false_on_fish() {
         // no character in the alphabet matches an out-of-bounds position
-        assert_eq!(ok("let f(x) = a(p(x))", "ab", "f", 0), F);
-        assert_eq!(ok("let f(x) = b(s(x))", "ab", "f", 1), F);
+        assert_eq!(ok_body(app("a", vec![app("p", vec![var("x")])]), "ab", 0), F);
+        assert_eq!(ok_body(app("b", vec![app("s", vec![var("x")])]), "ab", 1), F);
     }
 
     #[test]
     fn fish_on_both_sides_of_a_single_char_word() {
         // "a": pos 0 is bracketed by LeftFish and RightFish
-        assert_eq!(ok("let f(x) = p(x)", "a", "f", 0), Value::LeftFish);
-        assert_eq!(ok("let f(x) = s(x)", "a", "f", 0), Value::RightFish);
+        assert_eq!(ok_body(app("p", vec![var("x")]), "a", 0), Value::LeftFish);
+        assert_eq!(ok_body(app("s", vec![var("x")]), "a", 0), Value::RightFish);
     }
 
     #[test]
     fn if_condition_must_be_bool() {
         assert_err!(
-            "let f(x) = if s(x) then true else false",
-            "ab",
+            vec![def(
+                "f",
+                &["x"],
+                ite(app("s", vec![var("x")]), lit(true), lit(false))
+            )],
             "f",
+            "ab",
             0,
             TypeError
         );
@@ -609,20 +633,22 @@ mod tests {
     #[test]
     fn symbol_predicate_needs_a_position() {
         // not(x) is bool-valued, but a(..) expects a position
-        let src = "let not(x) = if x then false else true
-                   let f(x) = a(not(x))";
-        assert_err!(src, "ab", "f", 0, TypeError);
+        let defs = vec![
+            def("not", &["x"], ite(var("x"), lit(false), lit(true))),
+            def("f", &["x"], app("a", vec![app("not", vec![var("x")])])),
+        ];
+        assert_err!(defs, "f", "ab", 0, TypeError);
     }
 
     #[test]
     fn param_conflicting_with_symbol_predicate_is_name_conflict() {
         // param named `a` vs the symbol predicate injected by the word
-        assert_err!("let f(a) = x", "ab", "f", 0, NameConflict);
+        assert_err!(vec![def("f", &["a"], var("x"))], "f", "ab", 0, NameConflict);
     }
 
     #[test]
     fn param_conflicting_with_builtin_is_name_conflict() {
-        assert_err!("let f(s) = true", "ab", "f", 0, NameConflict);
+        assert_err!(vec![def("f", &["s"], lit(true))], "f", "ab", 0, NameConflict);
     }
 
     // --- cache contents after whole-program evaluation ---
@@ -630,7 +656,11 @@ mod tests {
     #[test]
     fn eval_program_caches_all_top_level_positions() {
         // "ab": pos 0 is a, pos 1 is b
-        let cache = eval_cache("let #f(x) = a(x)\nlet #g(x) = b(x)", "ab");
+        let defs = vec![
+            tdef("f", "x", app("a", vec![var("x")])),
+            tdef("g", "x", app("b", vec![var("x")])),
+        ];
+        let cache = cache_of(defs, "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), T);
         expected.insert(key("f", vec![p(1)]), F);
@@ -644,7 +674,11 @@ mod tests {
     #[test]
     fn fish_values_appear_in_truth_tables() {
         // the endpoints of "ab" fall off into fish
-        let cache = eval_cache("let #f(x) = p(x)\nlet #g(x) = s(x)", "ab");
+        let defs = vec![
+            tdef("f", "x", app("p", vec![var("x")])),
+            tdef("g", "x", app("s", vec![var("x")])),
+        ];
+        let cache = cache_of(defs, "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), Value::LeftFish);
         expected.insert(key("f", vec![p(1)]), p(0));
@@ -657,8 +691,16 @@ mod tests {
     fn recursion_memosizes_intermediate_calls() {
         // f(0) recurses through f(1); only f(0) starts the chain, but the
         // intermediate f(1) must land in the cache too
-        let src = "let #f(x) = if a(x) then true else f(s(x))";
-        let cache = eval_cache(src, "baa");
+        let defs = vec![tdef(
+            "f",
+            "x",
+            ite(
+                app("a", vec![var("x")]),
+                lit(true),
+                app("f", vec![app("s", vec![var("x")])]),
+            ),
+        )];
+        let cache = cache_of(defs, "baa");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), T);
         expected.insert(key("f", vec![p(1)]), T);
@@ -669,13 +711,16 @@ mod tests {
     #[test]
     fn cached_values_match_direct_evaluation() {
         // both marked top level, so each gets a full truth table
-        let src = "let #g(x) = a(x)\nlet #f(x) = g(x)";
-        let cache = eval_cache(src, "ab");
+        let defs = vec![
+            tdef("g", "x", app("a", vec![var("x")])),
+            tdef("f", "x", app("g", vec![var("x")])),
+        ];
+        let cache = cache_of(defs.clone(), "ab");
         for fname in ["f", "g"] {
             for pos in 0..2 {
                 assert_eq!(
                     cache[&key(fname, vec![p(pos)])],
-                    ok(src, "ab", fname, pos),
+                    ok_at(&defs, fname, "ab", pos),
                     "cache disagrees with direct eval for {fname} at {pos}"
                 );
             }
@@ -684,16 +729,13 @@ mod tests {
 
     #[test]
     fn cache_hit_returns_same_value() {
-        let src = "let g(x) = a(x)\nlet f(x) = g(x)";
-        let tokens = tokenize(src).expect("lex error");
-        let program = Parser::new(tokens).parse().expect("parse error");
+        let defs = vec![
+            def("g", &["x"], app("a", vec![var("x")])),
+            def("f", &["x"], app("g", vec![var("x")])),
+        ];
         let model = StringModel::new("ab");
-        let mut env = Env::new(&model.alphabet, &program.defs);
-        let def = program
-            .defs
-            .iter()
-            .find(|d| d.function == "f")
-            .expect("def not found");
+        let mut env = Env::new(&model.alphabet, &defs);
+        let def = defs.iter().find(|d| d.function == "f").expect("def not found");
         let mut vars = VariableTable::new();
         vars.insert_variable(&env, &def.params[0], p(0)).unwrap();
 
@@ -708,7 +750,13 @@ mod tests {
 
     #[test]
     fn top_level_function_with_two_params_is_type_error() {
-        match eval_cache_result("let #f(x, y) = a(x)", "ab") {
+        let defs = vec![Def {
+            top_level: true,
+            function: "f".into(),
+            params: vec!["x".into(), "y".into()],
+            expr: app("a", vec![var("x")]),
+        }];
+        match cache_result_of(defs, "ab") {
             Err(EvalError::TypeError { .. }) => {}
             other => panic!("expected EvalError::TypeError, got {other:?}"),
         }
@@ -720,8 +768,11 @@ mod tests {
     fn marked_program_with_bool_helper_evaluates() {
         // regression: unmarked helpers are only evaluated when called, so a
         // bool-argument helper like `not` no longer crashes whole-program eval
-        let src = "let #f(x) = not(a(x))\nlet not(x) = if x then false else true";
-        let cache = eval_cache(src, "ab");
+        let defs = vec![
+            tdef("f", "x", app("not", vec![app("a", vec![var("x")])])),
+            def("not", &["x"], ite(var("x"), lit(false), lit(true))),
+        ];
+        let cache = cache_of(defs, "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), F);
         expected.insert(key("f", vec![p(1)]), T);
@@ -734,7 +785,11 @@ mod tests {
     #[test]
     fn unmarked_defs_stay_out_of_the_truth_table() {
         // `g` is a helper never called by `f`, so it gets no top-level entries
-        let cache = eval_cache("let #f(x) = a(x)\nlet g(x) = b(x)", "ab");
+        let defs = vec![
+            tdef("f", "x", app("a", vec![var("x")])),
+            def("g", &["x"], app("b", vec![var("x")])),
+        ];
+        let cache = cache_of(defs, "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), T);
         expected.insert(key("f", vec![p(1)]), F);
@@ -744,39 +799,38 @@ mod tests {
     #[test]
     fn program_with_no_marked_defs_has_an_empty_cache() {
         // a program of pure helpers is legal, it just computes nothing
-        assert!(eval_cache("let f(x) = a(x)", "ab").is_empty());
+        let defs = vec![def("f", &["x"], app("a", vec![var("x")]))];
+        assert!(cache_of(defs, "ab").is_empty());
     }
 
     #[test]
     fn unmarked_two_param_def_is_not_a_type_error() {
         // the single-argument restriction applies only to marked defs
-        let cache = eval_cache_result("let f(x, y) = a(x)", "ab").expect("eval error");
-        assert!(cache.is_empty());
+        let defs = vec![def("f", &["x", "y"], app("a", vec![var("x")]))];
+        assert!(cache_result_of(defs, "ab").expect("eval error").is_empty());
     }
 
     // --- logical connectives ---
-    // NOTE: these are spec tests. They assume the folded AST (Expr::{And,Or,Not})
-    // and that `and`/`or` short-circuit like `if`'s untaken branch does, so an
-    // error that lives only in the skipped operand never surfaces. Until the
-    // parser/evaluator support connectives these fail — that is the expected
-    // baseline, mirroring `dead_branch_is_not_evaluated`.
+    // short-circuit + truth tables, exercised directly on the evaluator (the
+    // parser is covered by its own unit tests; wiring the two together belongs
+    // in integration tests).
 
     #[test]
     fn not_truth_table() {
-        assert_eq!(ok("let f(x) = not true", "ab", "f", 0), F);
-        assert_eq!(ok("let f(x) = not false", "ab", "f", 0), T);
+        assert_eq!(ok_body(not(lit(true)), "ab", 0), F);
+        assert_eq!(ok_body(not(lit(false)), "ab", 0), T);
         // "ab": pos 0 is a, pos 1 is b
-        assert_eq!(ok("let f(x) = not a(x)", "ab", "f", 0), F);
-        assert_eq!(ok("let f(x) = not a(x)", "ab", "f", 1), T);
+        assert_eq!(ok_body(not(app("a", vec![var("x")])), "ab", 0), F);
+        assert_eq!(ok_body(not(app("a", vec![var("x")])), "ab", 1), T);
     }
 
     #[test]
     fn and_or_over_symbol_predicates() {
         // "ab": pos 0 = (a=T, b=F), pos 1 = (a=F, b=T)
-        assert_eq!(ok("let f(x) = a(x) and b(x)", "ab", "f", 0), F);
-        assert_eq!(ok("let f(x) = a(x) and b(x)", "ab", "f", 1), F);
-        assert_eq!(ok("let f(x) = a(x) or b(x)", "ab", "f", 0), T);
-        assert_eq!(ok("let f(x) = a(x) or b(x)", "ab", "f", 1), T);
+        assert_eq!(ok_body(and(app("a", vec![var("x")]), app("b", vec![var("x")])), "ab", 0), F);
+        assert_eq!(ok_body(and(app("a", vec![var("x")]), app("b", vec![var("x")])), "ab", 1), F);
+        assert_eq!(ok_body(or(app("a", vec![var("x")]), app("b", vec![var("x")])), "ab", 0), T);
+        assert_eq!(ok_body(or(app("a", vec![var("x")]), app("b", vec![var("x")])), "ab", 1), T);
     }
 
     // --- short-circuit: the skipped operand must never be evaluated ---
@@ -784,42 +838,55 @@ mod tests {
     #[test]
     fn and_skips_rhs_when_lhs_false() {
         // q is unbound: reaching the rhs would raise UnboundFunction
-        assert_eq!(ok("let f(x) = false and q(x)", "ab", "f", 0), F);
+        assert_eq!(ok_body(and(lit(false), app("q", vec![var("x")])), "ab", 0), F);
     }
 
     #[test]
     fn or_skips_rhs_when_lhs_true() {
-        assert_eq!(ok("let f(x) = true or q(x)", "ab", "f", 0), T);
+        assert_eq!(ok_body(or(lit(true), app("q", vec![var("x")])), "ab", 0), T);
     }
 
     #[test]
     fn and_skips_rhs_with_type_error_operand() {
         // a(true) is a TypeError *if evaluated* — mirrors dead_branch_is_not_evaluated
-        assert_eq!(ok("let f(x) = false and a(true)", "ab", "f", 0), F);
+        assert_eq!(ok_body(and(lit(false), app("a", vec![lit(true)])), "ab", 0), F);
     }
 
     #[test]
     fn or_skips_rhs_with_type_error_operand() {
-        assert_eq!(ok("let f(x) = true or a(true)", "ab", "f", 0), T);
+        assert_eq!(ok_body(or(lit(true), app("a", vec![lit(true)])), "ab", 0), T);
     }
 
     // --- the other direction: the operand that decides the value IS evaluated ---
 
     #[test]
     fn and_evaluates_rhs_when_lhs_true() {
-        assert_err!("let f(x) = true and q(x)", "ab", "f", 0, UnboundFunction);
+        assert_err!(
+            vec![def("f", &["x"], and(lit(true), app("q", vec![var("x")])) )],
+            "f",
+            "ab",
+            0,
+            UnboundFunction
+        );
     }
 
     #[test]
     fn or_evaluates_rhs_when_lhs_false() {
-        assert_err!("let f(x) = false or q(x)", "ab", "f", 0, UnboundFunction);
+        assert_err!(
+            vec![def("f", &["x"], or(lit(false), app("q", vec![var("x")])) )],
+            "f",
+            "ab",
+            0,
+            UnboundFunction
+        );
     }
 
     // --- short-circuit must not change the computed truth table ---
 
     #[test]
     fn marked_def_with_connectives_produces_truth_table() {
-        let cache = eval_cache("let #f(x) = not a(x)", "ab");
+        let defs = vec![tdef("f", "x", not(app("a", vec![var("x")])))];
+        let cache = cache_of(defs, "ab");
         let mut expected = HashMap::new();
         expected.insert(key("f", vec![p(0)]), F);
         expected.insert(key("f", vec![p(1)]), T);

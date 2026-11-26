@@ -282,6 +282,8 @@ impl Parser {
 mod tests {
     use super::*;
 
+    use crate::test_util::{and, app, not, or, var};
+
     /// lexes `src` and parses it.
     fn parse_str(src: &str) -> Result<Program, ParseError> {
         let tokens = crate::lexer::tokenize(src).expect("lex error");
@@ -307,44 +309,11 @@ mod tests {
         err(src).span
     }
 
-    fn var(name: &str) -> Expr {
-        Expr::Variable(name.into())
-    }
-
-    fn app(function: &str, args: Vec<Expr>) -> Expr {
-        Expr::Application {
-            function: function.into(),
-            args,
-        }
-    }
-
-    // --- connective AST builders ---
-    // NOTE: these match the folded AST already in Expr:
-    //   Expr::And { lhs, rhs } | Expr::Or { lhs, rhs } | Expr::Not { exp }
-    fn not(e: Expr) -> Expr {
-        Expr::Not {
-            exp: Box::new(e),
-        }
-    }
-
-    fn and(lhs: Expr, rhs: Expr) -> Expr {
-        Expr::And {
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        }
-    }
-
-    fn or(lhs: Expr, rhs: Expr) -> Expr {
-        Expr::Or {
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        }
-    }
-
     /// parses `src` as a single def body and returns just its expression.
     fn body(src: &str) -> Expr {
         parse_ok(&format!("let f(x) = {src}")).defs[0].expr.clone()
     }
+
 
     #[test]
     fn empty_program() {
