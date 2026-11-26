@@ -231,13 +231,16 @@ fn eval_expr(
                 ));
             };
 
-            let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
-                return Err(EvalError::TypeError(
-                    "rhs of and statement was not a bool!".into(),
-                ));
-            };
-
-            Ok(Value::Bool(left_value && right_value))
+            if !left_value {
+                Ok(Value::Bool(false))
+            } else {
+                let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
+                    return Err(EvalError::TypeError(
+                        "rhs of and statement was not a bool!".into(),
+                    ));
+                };
+                Ok(Value::Bool(left_value && right_value))
+            }
         }
         Expr::Or { lhs, rhs } => {
             let Value::Bool(left_value) = eval_expr(lhs, model, env, vars)? else {
@@ -246,13 +249,16 @@ fn eval_expr(
                 ));
             };
 
-            let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
-                return Err(EvalError::TypeError(
-                    "rhs of or statement was not a bool!".into(),
-                ));
-            };
-
-            Ok(Value::Bool(left_value || right_value))
+            if left_value {
+                Ok(Value::Bool(true))
+            } else {
+                let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
+                    return Err(EvalError::TypeError(
+                        "rhs of or statement was not a bool!".into(),
+                    ));
+                };
+                Ok(Value::Bool(left_value || right_value))
+            }
         }
         Expr::Not { exp } => {
             let Value::Bool(value) = eval_expr(exp, model, env, vars)? else {
