@@ -318,6 +318,34 @@ mod tests {
         }
     }
 
+    // --- connective AST builders ---
+    // NOTE: these match the folded AST already in Expr:
+    //   Expr::And { lhs, rhs } | Expr::Or { lhs, rhs } | Expr::Not { exp }
+    fn not(e: Expr) -> Expr {
+        Expr::Not {
+            exp: Box::new(e),
+        }
+    }
+
+    fn and(lhs: Expr, rhs: Expr) -> Expr {
+        Expr::And {
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        }
+    }
+
+    fn or(lhs: Expr, rhs: Expr) -> Expr {
+        Expr::Or {
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        }
+    }
+
+    /// parses `src` as a single def body and returns just its expression.
+    fn body(src: &str) -> Expr {
+        parse_ok(&format!("let f(x) = {src}")).defs[0].expr.clone()
+    }
+
     #[test]
     fn empty_program() {
         assert_eq!(parse_ok(""), Program { defs: vec![] });
@@ -576,5 +604,106 @@ mod tests {
 
         // the EOF token has an empty span at the end of the input
         assert_eq!(err_span("let f(x) = (x"), 13..13);
+    }
+
+    // --- logical connectives: precedence & associativity ---
+    // precedence is or < and < not; both binary connectives are left-associative.
+
+    #[test]
+    fn not_binds_tighter_than_and() {
+        // `not a and b` parses as `(not a) and b`, not `not (a and b)`
+        assert_eq!(body("not a and b"), and(not(var("a")), var("b")));
+    }
+
+    #[test]
+    fn and_binds_tighter_than_or() {
+        assert_eq!(body("a or b and c"), or(var("a"), and(var("b"), var("c"))));
+        assert_eq!(body("a and b or c"), or(and(var("a"), var("b")), var("c")));
+    }
+
+    #[test]
+    fn connectives_are_left_associative() {
+        assert_eq!(
+            body("a and b and c"),
+            and(and(var("a"), var("b")), var("c"))
+        );
+        assert_eq!(
+            body("a or b or c"),
+            or(or(var("a"), var("b")), var("c"))
+        );
+    }
+
+    #[test]
+    fn grouped_connective_mix() {
+        // `a and b or c and d` => `(a and b) or (c and d)`
+        assert_eq!(
+            body("a and b or c and d"),
+            or(and(var("a"), var("b")), and(var("c"), var("d")))
+        );
+    }
+
+    #[test]
+    fn grouping_overrides_precedence() {
+        // parens force the `or` to bind tighter than the surrounding `and`
+        assert_eq!(
+            body("(a or b) and c"),
+            and(or(var("a"), var("b")), var("c"))
+        );
+    }
+
+    // --- logical connectives: operand shapes ---
+
+    #[test]
+    fn not_over_grouping_and_application() {
+        assert_eq!(
+            body("not (a and b)"),
+            not(and(var("a"), var("b")))
+        );
+        assert_eq!(body("not a(x)"), not(app("a", vec![var("x")])));
+    }
+
+    #[test]
+    fn double_negation_via_grouping() {
+        // `not (not a)` is valid; bare `not not a` depends on the not_expr rule
+        assert_eq!(body("not (not a)"), not(not(var("a"))));
+    }
+
+    #[test]
+    fn connectives_in_a_marked_def_body() {
+        let p = parse_ok("let #f(x) = not a(x) and b(x)");
+        assert!(p.defs[0].top_level);
+        assert_eq!(
+            p.defs[0].expr,
+            and(not(app("a", vec![var("x")])), app("b", vec![var("x")]))
+        );
+    }
+
+    #[test]
+    fn if_branches_are_full_expressions() {
+        // if is atomic but each of its three clauses parses a full <expr>
+        assert_eq!(
+            body("if a then b else c and d"),
+            Expr::IfThenElse {
+                if_clause: Box::new(var("a")),
+                then_clause: Box::new(var("b")),
+                else_clause: Box::new(and(var("c"), var("d"))),
+            }
+        );
+    }
+
+    // --- logical connectives: rejections ---
+
+    #[test]
+    fn rejects_leading_and_or_or() {
+        // and/or are infix only, so they can't start an expression
+        assert_eq!(err_span("let f(x) = and b"), 11..14); // `and`
+        assert_eq!(err_span("let f(x) = or b"), 11..13); // `or`
+    }
+
+    #[test]
+    fn rejects_dangling_connective() {
+        // a binary connective needs a right operand
+        assert_eq!(err_span("let f(x) = a and"), 16..16); // EOF
+        assert_eq!(err_span("let f(x) = a or"), 15..15); // EOF
     }
 }

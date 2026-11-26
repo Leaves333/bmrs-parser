@@ -353,4 +353,38 @@ mod tests {
         assert_eq!(toks("orange"), [Ident("orange".into()), EOF]);
         assert_eq!(toks("nothing"), [Ident("nothing".into()), EOF]);
     }
+
+    #[test]
+    fn chained_not_lexes_as_separate_keywords() {
+        assert_eq!(
+            toks("not not x"),
+            [Not, Not, Ident("x".into()), EOF]
+        );
+    }
+
+    #[test]
+    fn connectives_need_whitespace_only_before_an_ident() {
+        // punctuation delimits a connective with no space, but `and`/`or`/`not`
+        // still need a boundary before a following identifier (`andg` is one ident)
+        assert_eq!(
+            toks("f(x)and g(y)or h(z)"),
+            [
+                Ident("f".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                And,
+                Ident("g".into()),
+                LeftParen,
+                Ident("y".into()),
+                RightParen,
+                Or,
+                Ident("h".into()),
+                LeftParen,
+                Ident("z".into()),
+                RightParen,
+                EOF,
+            ]
+        );
+    }
 }

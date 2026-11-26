@@ -753,4 +753,76 @@ mod tests {
         let cache = eval_cache_result("let f(x, y) = a(x)", "ab").expect("eval error");
         assert!(cache.is_empty());
     }
+
+    // --- logical connectives ---
+    // NOTE: these are spec tests. They assume the folded AST (Expr::{And,Or,Not})
+    // and that `and`/`or` short-circuit like `if`'s untaken branch does, so an
+    // error that lives only in the skipped operand never surfaces. Until the
+    // parser/evaluator support connectives these fail — that is the expected
+    // baseline, mirroring `dead_branch_is_not_evaluated`.
+
+    #[test]
+    fn not_truth_table() {
+        assert_eq!(ok("let f(x) = not true", "ab", "f", 0), F);
+        assert_eq!(ok("let f(x) = not false", "ab", "f", 0), T);
+        // "ab": pos 0 is a, pos 1 is b
+        assert_eq!(ok("let f(x) = not a(x)", "ab", "f", 0), F);
+        assert_eq!(ok("let f(x) = not a(x)", "ab", "f", 1), T);
+    }
+
+    #[test]
+    fn and_or_over_symbol_predicates() {
+        // "ab": pos 0 = (a=T, b=F), pos 1 = (a=F, b=T)
+        assert_eq!(ok("let f(x) = a(x) and b(x)", "ab", "f", 0), F);
+        assert_eq!(ok("let f(x) = a(x) and b(x)", "ab", "f", 1), F);
+        assert_eq!(ok("let f(x) = a(x) or b(x)", "ab", "f", 0), T);
+        assert_eq!(ok("let f(x) = a(x) or b(x)", "ab", "f", 1), T);
+    }
+
+    // --- short-circuit: the skipped operand must never be evaluated ---
+
+    #[test]
+    fn and_skips_rhs_when_lhs_false() {
+        // q is unbound: reaching the rhs would raise UnboundFunction
+        assert_eq!(ok("let f(x) = false and q(x)", "ab", "f", 0), F);
+    }
+
+    #[test]
+    fn or_skips_rhs_when_lhs_true() {
+        assert_eq!(ok("let f(x) = true or q(x)", "ab", "f", 0), T);
+    }
+
+    #[test]
+    fn and_skips_rhs_with_type_error_operand() {
+        // a(true) is a TypeError *if evaluated* — mirrors dead_branch_is_not_evaluated
+        assert_eq!(ok("let f(x) = false and a(true)", "ab", "f", 0), F);
+    }
+
+    #[test]
+    fn or_skips_rhs_with_type_error_operand() {
+        assert_eq!(ok("let f(x) = true or a(true)", "ab", "f", 0), T);
+    }
+
+    // --- the other direction: the operand that decides the value IS evaluated ---
+
+    #[test]
+    fn and_evaluates_rhs_when_lhs_true() {
+        assert_err!("let f(x) = true and q(x)", "ab", "f", 0, UnboundFunction);
+    }
+
+    #[test]
+    fn or_evaluates_rhs_when_lhs_false() {
+        assert_err!("let f(x) = false or q(x)", "ab", "f", 0, UnboundFunction);
+    }
+
+    // --- short-circuit must not change the computed truth table ---
+
+    #[test]
+    fn marked_def_with_connectives_produces_truth_table() {
+        let cache = eval_cache("let #f(x) = not a(x)", "ab");
+        let mut expected = HashMap::new();
+        expected.insert(key("f", vec![p(0)]), F);
+        expected.insert(key("f", vec![p(1)]), T);
+        assert_eq!(cache, expected);
+    }
 }
