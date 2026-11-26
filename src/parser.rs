@@ -27,6 +27,17 @@ pub enum Expr {
         function: String,
         args: Vec<Expr>,
     },
+    And {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Or {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Not {
+        exp: Box<Expr>,
+    },
     Variable(String),
     Bool(bool),
 }

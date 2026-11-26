@@ -224,6 +224,45 @@ fn eval_expr(
                 Ok(eval_expr(else_clause, model, env, vars)?)
             }
         }
+        Expr::And { lhs, rhs } => {
+            let Value::Bool(left_value) = eval_expr(lhs, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "lhs of and statement was not a bool!".into(),
+                ));
+            };
+
+            let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "rhs of and statement was not a bool!".into(),
+                ));
+            };
+
+            Ok(Value::Bool(left_value && right_value))
+        }
+        Expr::Or { lhs, rhs } => {
+            let Value::Bool(left_value) = eval_expr(lhs, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "lhs of or statement was not a bool!".into(),
+                ));
+            };
+
+            let Value::Bool(right_value) = eval_expr(rhs, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "rhs of or statement was not a bool!".into(),
+                ));
+            };
+
+            Ok(Value::Bool(left_value || right_value))
+        }
+        Expr::Not { exp } => {
+            let Value::Bool(value) = eval_expr(exp, model, env, vars)? else {
+                return Err(EvalError::TypeError(
+                    "argument to not operator was not a bool!".into(),
+                ));
+            };
+
+            Ok(Value::Bool(!value))
+        }
         Expr::Application { function, args } => {
             let Some(entry) = env.function_table.get(function).cloned() else {
                 return Err(EvalError::UnboundFunction(function.clone()));
