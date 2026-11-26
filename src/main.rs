@@ -5,15 +5,12 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{
+use bmrs_parser::{
+    eval, lexer, parser,
     eval::{CacheKey, StringModel, Value},
     lexer::Token::Hash,
     parser::Program,
 };
-
-mod eval;
-mod lexer;
-mod parser;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
