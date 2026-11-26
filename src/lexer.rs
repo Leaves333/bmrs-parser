@@ -19,6 +19,12 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("not")]
+    Not,
+    #[token("and")]
+    And,
+    #[token("or")]
+    Or,
     #[token("(")]
     LeftParen,
     #[token(")")]
@@ -219,7 +225,16 @@ mod tests {
     fn trailing_comment_after_code() {
         assert_eq!(
             toks("let f(x) = true -- done"),
-            [Let, Ident("f".into()), LeftParen, Ident("x".into()), RightParen, Equals, True, EOF]
+            [
+                Let,
+                Ident("f".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                Equals,
+                True,
+                EOF
+            ]
         );
         // no whitespace needed before the comment
         assert_eq!(toks("true--x"), [True, EOF]);
@@ -229,7 +244,16 @@ mod tests {
     fn comment_between_tokens() {
         assert_eq!(
             toks("let f(x) = -- c\n  true"),
-            [Let, Ident("f".into()), LeftParen, Ident("x".into()), RightParen, Equals, True, EOF]
+            [
+                Let,
+                Ident("f".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                Equals,
+                True,
+                EOF
+            ]
         );
     }
 
@@ -282,7 +306,7 @@ mod tests {
 
     #[test]
     fn spans_slice_back_to_source_text() {
-        let src = "let f(x) = if b then true else false";
+        let src = "let f(x) = if not b and a(x) or true then true else false";
         for st in tokenize(src).expect("lex error") {
             let text = &src[st.span.clone()];
             match st.token {
@@ -292,6 +316,9 @@ mod tests {
                 Else => assert_eq!(text, "else"),
                 True => assert_eq!(text, "true"),
                 False => assert_eq!(text, "false"),
+                Not => assert_eq!(text, "not"),
+                And => assert_eq!(text, "and"),
+                Or => assert_eq!(text, "or"),
                 LeftParen => assert_eq!(text, "("),
                 RightParen => assert_eq!(text, ")"),
                 Equals => assert_eq!(text, "="),
@@ -301,5 +328,29 @@ mod tests {
                 EOF => assert!(text.is_empty(), "EOF span at {:?} is not empty", st.span),
             }
         }
+    }
+
+    #[test]
+    fn logical_connectives_lex_as_keywords() {
+        assert_eq!(
+            toks("not a and b or true"),
+            [
+                Not,
+                Ident("a".into()),
+                And,
+                Ident("b".into()),
+                Or,
+                True,
+                EOF
+            ]
+        );
+    }
+
+    #[test]
+    fn connective_prefixes_lex_as_ident() {
+        // like the other keywords, the identifier regex wins when it matches more chars
+        assert_eq!(toks("andy"), [Ident("andy".into()), EOF]);
+        assert_eq!(toks("orange"), [Ident("orange".into()), EOF]);
+        assert_eq!(toks("nothing"), [Ident("nothing".into()), EOF]);
     }
 }
