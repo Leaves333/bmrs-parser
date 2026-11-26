@@ -2,12 +2,16 @@
 
 - should parse and execute some BMRS DSL
 
-- [ ] design DSL
-- [ ] parse and execute single formula
+- [x] design DSL
+- [x] parse and execute single formula
+- [ ] update DSL to handle and/or/not syntactic sugar
+- [ ] check validity of outputted model
+- [ ] handle copy sets
+- [ ] run against testcases
+- [ ] handle features
 
 - lexer
     - https://logos.maciej.codes/attributes/logos.html
 - parser
-    - https://lib.rs/crates/nom
 - evaluator
     - top down, memoize computed values for each function
