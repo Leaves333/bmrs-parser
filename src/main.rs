@@ -6,9 +6,11 @@ use std::{
 };
 
 use bmrs_parser::{
-    eval, lexer, parser,
+    eval,
     eval::{CacheKey, StringModel, Value},
+    lexer,
     lexer::Token::Hash,
+    parser,
     parser::Program,
 };
 

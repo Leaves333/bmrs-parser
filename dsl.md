@@ -15,9 +15,9 @@ a program is a set of function definitions...
               | <atomic>
 
 <atomic>    ::= "if" <expr> "then" <expr> "else" <expr>
-              | IDENT "(" <expr> ( "," <expr> )* ")"    // application
-              | "(" <expr> ")"                                // grouping
-              | IDENT                                           // variable
+              | IDENT "(" <expr> ( "," <expr> )* ")"        // application
+              | "(" <expr> ")"                              // grouping
+              | IDENT                                       // variable
               | "true"
               | "false"
 ```

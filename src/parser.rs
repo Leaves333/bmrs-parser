@@ -188,10 +188,10 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        // NOTE: rule for expr:
-        // <expr>      ::= "if" <expr> "then" <expr> "else" <expr>
-        //               | IDENT "(" [ <expr> ( "," <expr> )* ] ")"    // application
+    fn parse_atomic_expr(&mut self) -> Result<Expr, ParseError> {
+        // NOTE: rule for atomic expr:
+        // <atomic>    ::= "if" <expr> "then" <expr> "else" <expr>
+        //               | IDENT "(" <expr> ( "," <expr> )* ")"        // application
         //               | "(" <expr> ")"                              // grouping
         //               | IDENT                                       // variable
         //               | "true"
@@ -276,6 +276,54 @@ impl Parser {
             self.peek()
         )))
     }
+
+    fn parse_not_expr(&mut self) -> Result<Expr, ParseError> {
+        let is_not_expr = if *self.peek() == Token::Not {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        let expr = self.parse_atomic_expr()?;
+        if is_not_expr {
+            Ok(Expr::Not {
+                exp: Box::new(expr),
+            })
+        } else {
+            Ok(expr)
+        }
+    }
+
+    fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_not_expr()?;
+        while *self.peek() == Token::And {
+            self.advance();
+            let rhs = self.parse_not_expr()?;
+            expr = Expr::And {
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_and_expr()?;
+        while *self.peek() == Token::Or {
+            self.advance();
+            let rhs = self.parse_and_expr()?;
+            expr = Expr::Or {
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        Ok(self.parse_or_expr()?)
+    }
 }
 
 #[cfg(test)]
@@ -313,7 +361,6 @@ mod tests {
     fn body(src: &str) -> Expr {
         parse_ok(&format!("let f(x) = {src}")).defs[0].expr.clone()
     }
-
 
     #[test]
     fn empty_program() {
@@ -596,10 +643,7 @@ mod tests {
             body("a and b and c"),
             and(and(var("a"), var("b")), var("c"))
         );
-        assert_eq!(
-            body("a or b or c"),
-            or(or(var("a"), var("b")), var("c"))
-        );
+        assert_eq!(body("a or b or c"), or(or(var("a"), var("b")), var("c")));
     }
 
     #[test]
@@ -624,10 +668,7 @@ mod tests {
 
     #[test]
     fn not_over_grouping_and_application() {
-        assert_eq!(
-            body("not (a and b)"),
-            not(and(var("a"), var("b")))
-        );
+        assert_eq!(body("not (a and b)"), not(and(var("a"), var("b"))));
         assert_eq!(body("not a(x)"), not(app("a", vec![var("x")])));
     }
 
