@@ -15,7 +15,7 @@ use bmrs_parser::{
 const T: Value = Value::Bool(true);
 const F: Value = Value::Bool(false);
 
-/// Run `source` over `word` and collect one row per top-level (`#`) def:
+/// Run `source` over `word` and collect one row per marked (`#` or `@`) def:
 /// the values at each domain position, in position order.
 fn rows(source: &str, word: &str) -> BTreeMap<String, Vec<Value>> {
     let toks = lexer::tokenize(source).expect("lex error");
@@ -25,7 +25,7 @@ fn rows(source: &str, word: &str) -> BTreeMap<String, Vec<Value>> {
 
     prog.defs
         .iter()
-        .filter(|d| d.top_level)
+        .filter(|d| d.kind.produces_row())
         .map(|d| {
             let row = (0..model.len())
                 .map(|i| {

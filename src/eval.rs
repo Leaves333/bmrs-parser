@@ -412,6 +412,7 @@ pub fn eval_program(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::DefKind;
     use crate::test_util::{and, app, def, ite, lit, not, or, tdef, var};
 
     // NOTE: these are *unit* tests for the evaluator. They build `Expr`/`Def`
@@ -751,7 +752,7 @@ mod tests {
     #[test]
     fn top_level_function_with_two_params_is_type_error() {
         let defs = vec![Def {
-            top_level: true,
+            kind: DefKind::Debug,
             function: "f".into(),
             params: vec!["x".into(), "y".into()],
             expr: app("a", vec![var("x")]),

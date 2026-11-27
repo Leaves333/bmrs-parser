@@ -5,7 +5,7 @@ a program is a set of function definitions...
 ```txt
 <program>   ::= <def>*
 
-<def>       ::= "let" HASH? IDENT "(" <params> ")" "=" <expr>
+<def>       ::= "let" ["@" IDENT [":" NUMBER] | "#"] IDENT "(" <params> ")" "=" <expr>
 <params>    ::= IDENT ( "," IDENT )*                        // one or more distinct parameters
 
 <expr>      ::= <or_expr>

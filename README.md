@@ -4,7 +4,8 @@
 
 - [x] design DSL
 - [x] parse and execute single formula
-- [ ] update DSL to handle and/or/not syntactic sugar
+- [x] update DSL to handle and/or/not syntactic sugar
+- [ ] have function decorators for output
 - [ ] check validity of outputted model
 - [ ] handle copy sets
 - [ ] run against testcases

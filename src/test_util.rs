@@ -8,7 +8,7 @@
 //!
 //! NOTE: test-only module — declared in `lib.rs` under `#[cfg(test)]`.
 
-use crate::parser::{Def, Expr};
+use crate::parser::{Def, DefKind, Expr};
 
 // --- expression constructors ---
 
@@ -61,17 +61,30 @@ pub(crate) fn or(lhs: Expr, rhs: Expr) -> Expr {
 /// a non-top-level def (`let f(x, ...) = expr`)
 pub(crate) fn def(function: &str, params: &[&str], expr: Expr) -> Def {
     Def {
-        top_level: false,
+        kind: DefKind::Hidden,
         function: function.into(),
         params: params.iter().map(|p| p.to_string()).collect(),
         expr,
     }
 }
 
-/// a top-level (`#`-marked) def with a single parameter
+/// a `#`-marked debug row: a truth table is computed, but it is not enrolled in the
+/// phoneme validity check. single parameter.
 pub(crate) fn tdef(function: &str, param: &str, expr: Expr) -> Def {
     Def {
-        top_level: true,
+        kind: DefKind::Debug,
+        function: function.into(),
+        params: vec![param.into()],
+        expr,
+    }
+}
+
+/// an `@phoneme`-decorated output def: a row that *does* join the exactly-one check.
+/// `label` is the output phoneme and may differ from the function's own name.
+#[allow(dead_code)] // consumed by the upcoming validity tests
+pub(crate) fn odef(label: &str, function: &str, param: &str, expr: Expr) -> Def {
+    Def {
+        kind: DefKind::Output(label.into()),
         function: function.into(),
         params: vec![param.into()],
         expr,

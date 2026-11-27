@@ -207,6 +207,31 @@ mod tests {
     }
 
     #[test]
+    fn at_lexes_as_its_own_token() {
+        assert_eq!(toks("@"), [At, EOF]);
+        // no `@ident` token — the decorator is always a separate token
+        assert_eq!(toks("@a"), [At, Ident("a".into()), EOF]);
+        assert_eq!(
+            toks("let @a a'(x) = a(x)"),
+            [
+                Let,
+                At,
+                Ident("a".into()),
+                Ident("a'".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                Equals,
+                Ident("a".into()),
+                LeftParen,
+                Ident("x".into()),
+                RightParen,
+                EOF,
+            ]
+        );
+    }
+
+    #[test]
     fn whitespace_kinds_are_skipped() {
         assert_eq!(
             toks("let\t\r\n\x0C f = true"),
@@ -271,8 +296,8 @@ mod tests {
 
     #[test]
     fn reports_lex_error_with_absolute_span() {
-        let err = tokenize("let f(x) = @").expect_err("expected lex error");
-        assert_eq!(err.found, "@");
+        let err = tokenize("let f(x) = !").expect_err("expected lex error");
+        assert_eq!(err.found, "!");
         assert_eq!(err.span, 11..12);
     }
 
@@ -306,7 +331,7 @@ mod tests {
 
     #[test]
     fn spans_slice_back_to_source_text() {
-        let src = "let f(x) = if not b and a(x) or true then true else false";
+        let src = "let @a f(x) = if not b and a(x) or true then true else false";
         for st in tokenize(src).expect("lex error") {
             let text = &src[st.span.clone()];
             match st.token {
@@ -324,6 +349,7 @@ mod tests {
                 Equals => assert_eq!(text, "="),
                 Comma => assert_eq!(text, ","),
                 Hash => assert_eq!(text, "#"),
+                At => assert_eq!(text, "@"),
                 Ident(s) => assert_eq!(text, s),
                 EOF => assert!(text.is_empty(), "EOF span at {:?} is not empty", st.span),
             }
@@ -356,10 +382,7 @@ mod tests {
 
     #[test]
     fn chained_not_lexes_as_separate_keywords() {
-        assert_eq!(
-            toks("not not x"),
-            [Not, Not, Ident("x".into()), EOF]
-        );
+        assert_eq!(toks("not not x"), [Not, Not, Ident("x".into()), EOF]);
     }
 
     #[test]

@@ -373,7 +373,7 @@ mod tests {
             parse_ok("let f(x) = x"),
             Program {
                 defs: vec![Def {
-                    top_level: false,
+                    kind: DefKind::Hidden,
                     function: "f".into(),
                     params: vec!["x".into()],
                     expr: var("x"),
@@ -399,7 +399,7 @@ mod tests {
             parse_ok("let f(x, y) = if x then f(y, false) else true"),
             Program {
                 defs: vec![Def {
-                    top_level: false,
+                    kind: DefKind::Hidden,
                     function: "f".into(),
                     params: vec!["x".into(), "y".into()],
                     expr: Expr::IfThenElse {
@@ -447,26 +447,71 @@ mod tests {
     }
 
     #[test]
-    fn unmarked_def_is_not_top_level() {
+    fn unmarked_def_is_hidden() {
         let p = parse_ok("let f(x) = true");
-        assert!(!p.defs[0].top_level);
+        assert_eq!(p.defs[0].kind, DefKind::Hidden);
     }
 
     #[test]
-    fn hash_marker_marks_def_top_level() {
+    fn hash_marker_marks_def_debug() {
         // `#` sits between `let` and the name; it must not add an AST node
         let p = parse_ok("let #f(x) = true");
-        assert!(p.defs[0].top_level);
+        assert_eq!(p.defs[0].kind, DefKind::Debug);
         assert_eq!(p.defs[0].function, "f");
         assert_eq!(p.defs[0].expr, Expr::Bool(true));
     }
 
     #[test]
-    fn top_level_flag_is_per_def() {
+    fn def_kind_is_per_def() {
         let p = parse_ok("let #f(x) = true let g(x) = false let #h(x) = true");
-        assert!(p.defs[0].top_level);
-        assert!(!p.defs[1].top_level);
-        assert!(p.defs[2].top_level);
+        assert_eq!(p.defs[0].kind, DefKind::Debug);
+        assert_eq!(p.defs[1].kind, DefKind::Hidden);
+        assert_eq!(p.defs[2].kind, DefKind::Debug);
+    }
+
+    // --- output-phoneme decorator (`@`) ---
+
+    #[test]
+    fn at_decorator_sets_output() {
+        // `@a'` labels the output phoneme; the function keeps its own name (`a'` here,
+        // but they may differ). the decorator also implies a computed row.
+        let p = parse_ok("let @a' a'(x) = true");
+        let d = &p.defs[0];
+        assert_eq!(d.kind, DefKind::Output("a'".into()));
+        assert!(d.kind.produces_row());
+        assert_eq!(d.kind.output(), Some("a'"));
+        assert_eq!(d.function, "a'");
+    }
+
+    #[test]
+    fn plain_and_debug_defs_have_no_output_phoneme() {
+        let p = parse_ok("let f(x) = true let #g(x) = true");
+        assert_eq!(p.defs[0].kind, DefKind::Hidden); // plain helper
+        assert_eq!(p.defs[0].kind.output(), None);
+        assert_eq!(p.defs[1].kind, DefKind::Debug); // `#` debug row
+        assert_eq!(p.defs[1].kind.output(), None);
+    }
+
+    #[test]
+    fn rejects_output_and_debug_markers_together() {
+        // `@a #f(..)`: after the `@a` label, a function name is expected, not `#`
+        assert_eq!(err_span("let @a #f(x) = true"), 7..8); // `#`
+    }
+
+    #[test]
+    fn rejects_decorator_without_phoneme() {
+        assert_eq!(err_span("let @(x) = true"), 5..6); // `(` where the phoneme belongs
+    }
+
+    #[test]
+    fn rejects_duplicate_function_name() {
+        assert_eq!(err_span("let f(x) = true let f(y) = true"), 20..21); // 2nd `f`
+    }
+
+    #[test]
+    fn rejects_duplicate_output_phoneme() {
+        // both defs declare phoneme `a`; the error points at the second def's name
+        assert_eq!(err_span("let @a f(x) = true let @a g(x) = true"), 26..27); // `g`
     }
 
     #[test]
@@ -493,7 +538,7 @@ mod tests {
             parse_ok("let f(a, b) = if a then if b then true else false else true"),
             Program {
                 defs: vec![Def {
-                    top_level: false,
+                    kind: DefKind::Hidden,
                     function: "f".into(),
                     params: vec!["a".into(), "b".into()],
                     expr: Expr::IfThenElse {
@@ -681,7 +726,7 @@ mod tests {
     #[test]
     fn connectives_in_a_marked_def_body() {
         let p = parse_ok("let #f(x) = not a(x) and b(x)");
-        assert!(p.defs[0].top_level);
+        assert_eq!(p.defs[0].kind, DefKind::Debug);
         assert_eq!(
             p.defs[0].expr,
             and(not(app("a", vec![var("x")])), app("b", vec![var("x")]))
