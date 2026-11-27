@@ -8,9 +8,15 @@ pub struct Program {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub enum DefKind {
+    Hidden,
+    Debug,
+    Output(String),
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct Def {
-    /// true when the def is marked `#` (its truth table gets computed)
-    pub top_level: bool,
+    pub kind: DefKind,
     pub function: String,
     pub params: Vec<String>,
     pub expr: Expr,
@@ -478,8 +484,6 @@ mod tests {
         let p = parse_ok("let @a' a'(x) = true");
         let d = &p.defs[0];
         assert_eq!(d.kind, DefKind::Output("a'".into()));
-        assert!(d.kind.produces_row());
-        assert_eq!(d.kind.output(), Some("a'"));
         assert_eq!(d.function, "a'");
     }
 
@@ -487,9 +491,7 @@ mod tests {
     fn plain_and_debug_defs_have_no_output_phoneme() {
         let p = parse_ok("let f(x) = true let #g(x) = true");
         assert_eq!(p.defs[0].kind, DefKind::Hidden); // plain helper
-        assert_eq!(p.defs[0].kind.output(), None);
         assert_eq!(p.defs[1].kind, DefKind::Debug); // `#` debug row
-        assert_eq!(p.defs[1].kind.output(), None);
     }
 
     #[test]

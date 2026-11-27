@@ -33,9 +33,14 @@ pub enum Token {
     Equals,
     #[token(",")]
     Comma,
-    /// top-level marker: `let #f(x) = ...`
+    /// debug output marker: `let # f(x) = ...`
     #[token("#")]
     Hash,
+    /// phoneme output marker: `let @a f(x) = ...`
+    #[token("@")]
+    At,
+    /// identifiers start with an alphabetical char,
+    /// then can be any string of alphanumeric + underscore + prime
     #[regex(r"[A-Za-z_][A-Za-z0-9_']*", |lex| lex.slice().to_string())]
     Ident(String),
     /// this variant is never produced by the lexer.
